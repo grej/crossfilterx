@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "target": "es2022",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": "./",
+    "paths": {
+      "@crossfilterx/core": ["packages/core/src/index.ts"],
+      "@crossfilterx/adapter-crossfilter": ["packages/adapter-crossfilter/src/index.ts"]
+    }
+  }
+}

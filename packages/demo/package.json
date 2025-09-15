@@ -1,0 +1,13 @@
+{
+  "name": "@crossfilterx/demo",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@crossfilterx/core": "file:../core",
+    "@crossfilterx/adapter-crossfilter": "file:../adapter-crossfilter"
+  }
+}

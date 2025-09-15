@@ -1,0 +1,13 @@
+{
+  "name": "@crossfilterx/bench",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "bench": "node dist/runner.js"
+  },
+  "dependencies": {
+    "@crossfilterx/core": "file:../core"
+  }
+}
