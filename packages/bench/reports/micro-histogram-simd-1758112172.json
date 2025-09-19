@@ -1,0 +1,184 @@
+[
+  {
+    "mode": "direct",
+    "rows": 1000000,
+    "dimensions": 6,
+    "iterations": 5,
+    "ingestMs": 77.631334,
+    "filterAvgMs": 20.296683599999994,
+    "clearAvgMs": 17.3825586,
+    "samples": [
+      {
+        "filterMs": 21.30641700000001,
+        "clearMs": 16.249666999999988,
+        "profile": {
+          "fallback": false,
+          "insideRows": 800253,
+          "outsideRows": 199747,
+          "insideMs": 2.5679999999999836,
+          "outsideMs": 12.74912500000002,
+          "totalMs": 15.317125000000004,
+          "outsideFraction": 0.199747,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000
+      },
+      {
+        "filterMs": 19.825083000000006,
+        "clearMs": 24.89058399999999,
+        "profile": {
+          "fallback": false,
+          "insideRows": 800253,
+          "outsideRows": 199747,
+          "insideMs": 5.613291000000004,
+          "outsideMs": 19.147249999999985,
+          "totalMs": 24.76054099999999,
+          "outsideFraction": 0.199747,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000
+      },
+      {
+        "filterMs": 20.141249999999985,
+        "clearMs": 16.946292,
+        "profile": {
+          "fallback": false,
+          "insideRows": 800253,
+          "outsideRows": 199747,
+          "insideMs": 5.254500000000007,
+          "outsideMs": 11.612124999999992,
+          "totalMs": 16.866625,
+          "outsideFraction": 0.199747,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000
+      },
+      {
+        "filterMs": 20.153334,
+        "clearMs": 14.60820799999999,
+        "profile": {
+          "fallback": false,
+          "insideRows": 800253,
+          "outsideRows": 199747,
+          "insideMs": 5.167500000000018,
+          "outsideMs": 9.359166000000016,
+          "totalMs": 14.526666000000034,
+          "outsideFraction": 0.199747,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000
+      },
+      {
+        "filterMs": 20.05733399999997,
+        "clearMs": 14.218042000000025,
+        "profile": {
+          "fallback": false,
+          "insideRows": 800253,
+          "outsideRows": 199747,
+          "insideMs": 4.842999999999961,
+          "outsideMs": 9.301208000000031,
+          "totalMs": 14.144207999999992,
+          "outsideFraction": 0.199747,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000
+      }
+    ]
+  },
+  {
+    "mode": "simd",
+    "rows": 1000000,
+    "dimensions": 6,
+    "iterations": 5,
+    "ingestMs": 69.38708299999996,
+    "filterAvgMs": 20.2282916,
+    "clearAvgMs": 16.386141399999996,
+    "samples": [
+      {
+        "filterMs": 20.62258300000002,
+        "clearMs": 17.48475000000002,
+        "profile": {
+          "fallback": false,
+          "insideRows": 799480,
+          "outsideRows": 200520,
+          "insideMs": 5.12458399999997,
+          "outsideMs": 12.25970799999999,
+          "totalMs": 17.38429199999996,
+          "outsideFraction": 0.20052,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000
+      },
+      {
+        "filterMs": 20.283457999999996,
+        "clearMs": 18.642375000000015,
+        "profile": {
+          "fallback": false,
+          "insideRows": 799480,
+          "outsideRows": 200520,
+          "insideMs": 5.181332999999995,
+          "outsideMs": 13.375541999999996,
+          "totalMs": 18.55687499999999,
+          "outsideFraction": 0.20052,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000
+      },
+      {
+        "filterMs": 19.915250000000015,
+        "clearMs": 14.94954100000001,
+        "profile": {
+          "fallback": false,
+          "insideRows": 799480,
+          "outsideRows": 200520,
+          "insideMs": 4.863541999999995,
+          "outsideMs": 10.015833000000043,
+          "totalMs": 14.879375000000039,
+          "outsideFraction": 0.20052,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000
+      },
+      {
+        "filterMs": 20.073541999999975,
+        "clearMs": 15.852624999999989,
+        "profile": {
+          "fallback": false,
+          "insideRows": 799480,
+          "outsideRows": 200520,
+          "insideMs": 5.049583999999982,
+          "outsideMs": 10.718374999999924,
+          "totalMs": 15.767958999999905,
+          "outsideFraction": 0.20052,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000
+      },
+      {
+        "filterMs": 20.246624999999995,
+        "clearMs": 15.00141599999995,
+        "profile": {
+          "fallback": false,
+          "insideRows": 799480,
+          "outsideRows": 200520,
+          "insideMs": 4.969540999999936,
+          "outsideMs": 9.938209000000029,
+          "totalMs": 14.907749999999965,
+          "outsideFraction": 0.20052,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000
+      }
+    ]
+  }
+]

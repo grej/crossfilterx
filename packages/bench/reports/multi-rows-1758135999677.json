@@ -1,0 +1,95 @@
+{
+  "scenario": "multi",
+  "rows": 1000000,
+  "dimensions": 6,
+  "columnar": false,
+  "range": {
+    "min": 0,
+    "max": 1000
+  },
+  "ingestMs": 234.77558400000004,
+  "filterFractions": [
+    {
+      "dim": "dim0",
+      "lo": 0.15,
+      "hi": 0.85,
+      "bins": [
+        614,
+        3481
+      ]
+    },
+    {
+      "dim": "dim1",
+      "lo": 0.3,
+      "hi": 0.65,
+      "bins": [
+        1229,
+        2662
+      ]
+    },
+    {
+      "dim": "dim2",
+      "lo": 0.45,
+      "hi": 0.75,
+      "bins": [
+        1843,
+        3071
+      ]
+    }
+  ],
+  "index": [
+    {
+      "dim": "dim0",
+      "ms": 3.500915999999961,
+      "bytes": 4016388
+    },
+    {
+      "dim": "dim1",
+      "ms": 1.678666000000021,
+      "bytes": 4016388
+    },
+    {
+      "dim": "dim2",
+      "ms": 1.6627079999999523,
+      "bytes": 4016388
+    }
+  ],
+  "filters": [
+    {
+      "dim": "dim0",
+      "ms": 0.07258300000000872,
+      "activeCount": 1000000
+    },
+    {
+      "dim": "dim1",
+      "ms": 22.46345800000006,
+      "activeCount": 699335
+    },
+    {
+      "dim": "dim2",
+      "ms": 21.629292000000078,
+      "activeCount": 244807
+    }
+  ],
+  "clears": [
+    {
+      "dim": "dim0",
+      "ms": 20.815791999999988,
+      "activeCount": 699335,
+      "profile": null
+    },
+    {
+      "dim": "dim1",
+      "ms": 21.84891600000003,
+      "activeCount": 244807,
+      "profile": null
+    },
+    {
+      "dim": "dim2",
+      "ms": 28.665834000000018,
+      "activeCount": 73266,
+      "profile": null
+    }
+  ],
+  "timestamp": "2025-09-17T19:06:41.159Z"
+}

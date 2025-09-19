@@ -1,0 +1,32 @@
+{
+  "rows": 1000000,
+  "dimensions": 6,
+  "range": {
+    "min": 0,
+    "max": 1000
+  },
+  "filterFractions": {
+    "lo": 0.49,
+    "hi": 0.51
+  },
+  "ingestMs": 221.12066600000003,
+  "index": {
+    "ms": 3.571124999999995,
+    "bytes": 4016388
+  },
+  "filter": {
+    "ms": 12.955250000000035,
+    "activeCount": 20087
+  },
+  "clearMs": 20.470541000000026,
+  "profile": {
+    "clear": {
+      "fallback": true,
+      "insideRows": 20087,
+      "outsideRows": 979913,
+      "outsideFraction": 0.979913,
+      "rangeBins": 82
+    }
+  },
+  "timestamp": "2025-09-16T19:09:43.081Z"
+}

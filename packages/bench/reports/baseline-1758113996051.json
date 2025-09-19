@@ -1,0 +1,27 @@
+{
+  "scenario": "single",
+  "rows": 100000,
+  "dimensions": 6,
+  "range": {
+    "min": 0,
+    "max": 1000
+  },
+  "filterFractions": {
+    "lo": 0.25,
+    "hi": 0.75
+  },
+  "columnar": false,
+  "ingestMs": 21.970667,
+  "index": {
+    "ms": 1.665292000000008,
+    "bytes": 416388
+  },
+  "filter": {
+    "ms": 3.0258330000000058,
+    "activeCount": 49842
+  },
+  "clearMs": 2.168790999999999,
+  "clearActiveCount": 100000,
+  "profile": null,
+  "timestamp": "2025-09-17T12:59:57.012Z"
+}

@@ -1,0 +1,155 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0f172a;
+  --fg: #e2e8f0;
+  --accent: #38bdf8;
+  --accent-2: #f97316;
+  --text: #0f172a;
+  --surface: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #f8fafc;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.hero {
+  padding: 96px 24px 72px;
+  text-align: center;
+  background: radial-gradient(circle at top, #0ea5e9, #0f172a 70%);
+  color: var(--fg);
+}
+
+.hero h1 {
+  font-size: clamp(3rem, 6vw, 4.5rem);
+  margin: 0 0 16px;
+}
+
+.tagline {
+  font-size: clamp(1.1rem, 3vw, 1.5rem);
+  margin: 0 0 32px;
+}
+
+.cta {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.button {
+  padding: 12px 24px;
+  border-radius: 999px;
+  font-weight: 600;
+  text-decoration: none;
+  background: var(--fg);
+  color: var(--bg);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.button.secondary {
+  background: transparent;
+  color: var(--fg);
+  border: 2px solid rgba(226, 232, 240, 0.4);
+}
+
+.button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.2);
+}
+
+section {
+  padding: 64px 24px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+section h2 {
+  text-align: center;
+  margin-bottom: 24px;
+  font-size: clamp(2rem, 4vw, 2.6rem);
+}
+
+.goals .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 24px;
+}
+
+.goals article {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+}
+
+.benchmarks .table-wrapper {
+  overflow-x: auto;
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+}
+
+.benchmarks table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.benchmarks th,
+.benchmarks td {
+  padding: 16px;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+
+.benchmarks tbody tr:nth-child(every) {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.get-started ol {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 24px 32px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+}
+
+footer {
+  text-align: center;
+  padding: 32px 24px 64px;
+  color: #475569;
+}
+
+code {
+  background: rgba(148, 163, 184, 0.15);
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #020617;
+    color: #e2e8f0;
+  }
+  section h2 {
+    color: #f8fafc;
+  }
+  .goals article,
+  .benchmarks .table-wrapper,
+  .get-started ol {
+    background: rgba(15, 23, 42, 0.8);
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.3);
+  }
+  .benchmarks th,
+  .benchmarks td {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+  }
+}

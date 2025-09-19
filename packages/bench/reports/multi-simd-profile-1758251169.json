@@ -1,0 +1,300 @@
+{
+  "scenario": "multi",
+  "rows": 5000000,
+  "dimensions": 6,
+  "columnar": true,
+  "range": {
+    "min": 0,
+    "max": 1000
+  },
+  "ingestMs": 372.11704199999997,
+  "filterFractions": [
+    {
+      "dim": "dim0",
+      "lo": 0.15,
+      "hi": 0.85,
+      "bins": [
+        614,
+        3481
+      ]
+    },
+    {
+      "dim": "dim1",
+      "lo": 0.3,
+      "hi": 0.65,
+      "bins": [
+        1229,
+        2662
+      ]
+    },
+    {
+      "dim": "dim2",
+      "lo": 0.45,
+      "hi": 0.75,
+      "bins": [
+        1843,
+        3071
+      ]
+    }
+  ],
+  "index": [
+    {
+      "dim": "dim0",
+      "ms": 9.954291999999896,
+      "bytes": 20016388
+    },
+    {
+      "dim": "dim1",
+      "ms": 8.062833999999953,
+      "bytes": 20016388
+    },
+    {
+      "dim": "dim2",
+      "ms": 7.944666999999981,
+      "bytes": 20016388
+    }
+  ],
+  "filters": [
+    {
+      "dim": "dim0",
+      "ms": 0.07666600000004564,
+      "activeCount": 5000000,
+      "shardProfile": []
+    },
+    {
+      "dim": "dim1",
+      "ms": 104.42258300000003,
+      "activeCount": 3500808,
+      "shardProfile": []
+    },
+    {
+      "dim": "dim2",
+      "ms": 106.12737500000003,
+      "activeCount": 1227246,
+      "shardProfile": []
+    }
+  ],
+  "clears": [
+    {
+      "dim": "dim0",
+      "ms": 298.17383300000006,
+      "activeCount": 3500808,
+      "profile": null,
+      "shardProfile": [
+        {
+          "dim": 0,
+          "delta": 1,
+          "rows": 2273562,
+          "copyMs": 3.3597500000000764,
+          "wasmMs": 19.035666999999876,
+          "metrics": {
+            "flushes": 12,
+            "evictions": 0,
+            "finalFlushes": 12,
+            "bins": 2868,
+            "rows": 2273562
+          }
+        },
+        {
+          "dim": 1,
+          "delta": 1,
+          "rows": 2273562,
+          "copyMs": 7.756583999999975,
+          "wasmMs": 7.487833000000137,
+          "metrics": {
+            "flushes": 11,
+            "evictions": 0,
+            "finalFlushes": 11,
+            "bins": 2662,
+            "rows": 2273562
+          }
+        },
+        {
+          "dim": 2,
+          "delta": 1,
+          "rows": 2273562,
+          "copyMs": 3.22787500000004,
+          "wasmMs": 21.40341599999988,
+          "metrics": {
+            "flushes": 16,
+            "evictions": 0,
+            "finalFlushes": 16,
+            "bins": 4096,
+            "rows": 2273562
+          }
+        },
+        {
+          "dim": 3,
+          "delta": 1,
+          "rows": 2273562,
+          "copyMs": 2.7562920000000304,
+          "wasmMs": 21.392832999999882,
+          "metrics": {
+            "flushes": 16,
+            "evictions": 0,
+            "finalFlushes": 16,
+            "bins": 4096,
+            "rows": 2273562
+          }
+        },
+        {
+          "dim": 4,
+          "delta": 1,
+          "rows": 2273562,
+          "copyMs": 2.633790999999974,
+          "wasmMs": 21.40387499999997,
+          "metrics": {
+            "flushes": 16,
+            "evictions": 0,
+            "finalFlushes": 16,
+            "bins": 4096,
+            "rows": 2273562
+          }
+        },
+        {
+          "dim": 5,
+          "delta": 1,
+          "rows": 2273562,
+          "copyMs": 2.7607500000001437,
+          "wasmMs": 21.316584000000148,
+          "metrics": {
+            "flushes": 16,
+            "evictions": 0,
+            "finalFlushes": 16,
+            "bins": 4096,
+            "rows": 2273562
+          }
+        }
+      ]
+    },
+    {
+      "dim": "dim1",
+      "ms": 130.36575000000005,
+      "activeCount": 1227246,
+      "profile": null,
+      "shardProfile": [
+        {
+          "dim": 0,
+          "delta": 1,
+          "rows": 858611,
+          "copyMs": 3.028874999999971,
+          "wasmMs": 12.088958000000048,
+          "metrics": {
+            "flushes": 12,
+            "evictions": 0,
+            "finalFlushes": 12,
+            "bins": 2868,
+            "rows": 858611
+          }
+        },
+        {
+          "dim": 1,
+          "delta": 1,
+          "rows": 858611,
+          "copyMs": 4.507292000000007,
+          "wasmMs": 5.868875000000003,
+          "metrics": {
+            "flushes": 7,
+            "evictions": 0,
+            "finalFlushes": 7,
+            "bins": 1434,
+            "rows": 858611
+          }
+        },
+        {
+          "dim": 2,
+          "delta": 1,
+          "rows": 858611,
+          "copyMs": 1.5336670000000368,
+          "wasmMs": 2.9355419999999413,
+          "metrics": {
+            "flushes": 12,
+            "evictions": 0,
+            "finalFlushes": 12,
+            "bins": 2867,
+            "rows": 858611
+          }
+        },
+        {
+          "dim": 3,
+          "delta": 1,
+          "rows": 858611,
+          "copyMs": 1.461999999999989,
+          "wasmMs": 7.844249999999988,
+          "metrics": {
+            "flushes": 16,
+            "evictions": 0,
+            "finalFlushes": 16,
+            "bins": 4096,
+            "rows": 858611
+          }
+        },
+        {
+          "dim": 4,
+          "delta": 1,
+          "rows": 858611,
+          "copyMs": 1.7409589999999753,
+          "wasmMs": 7.844624999999951,
+          "metrics": {
+            "flushes": 16,
+            "evictions": 0,
+            "finalFlushes": 16,
+            "bins": 4096,
+            "rows": 858611
+          }
+        },
+        {
+          "dim": 5,
+          "delta": 1,
+          "rows": 858611,
+          "copyMs": 1.4588329999999132,
+          "wasmMs": 7.952915999999959,
+          "metrics": {
+            "flushes": 16,
+            "evictions": 0,
+            "finalFlushes": 16,
+            "bins": 4096,
+            "rows": 858611
+          }
+        }
+      ]
+    },
+    {
+      "dim": "dim2",
+      "ms": 144.133333,
+      "activeCount": 368635,
+      "profile": null,
+      "shardProfile": []
+    }
+  ],
+  "shardSummary": {
+    "totalFlushes": 166,
+    "totalEvictions": 0,
+    "totalBins": 41371,
+    "totalRows": 18793038,
+    "perDimension": [
+      {
+        "dim": "dim0",
+        "flushes": 87,
+        "evictions": 0,
+        "bins": 21914,
+        "rows": 13641372
+      },
+      {
+        "dim": "dim1",
+        "flushes": 79,
+        "evictions": 0,
+        "bins": 19457,
+        "rows": 5151666
+      },
+      {
+        "dim": "dim2",
+        "flushes": 0,
+        "evictions": 0,
+        "bins": 0,
+        "rows": 0
+      }
+    ]
+  },
+  "timestamp": "2025-09-19T03:06:12.120Z"
+}

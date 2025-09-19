@@ -1,0 +1,25 @@
+{
+  "rows": 100000,
+  "dimensions": 6,
+  "range": {
+    "min": 0,
+    "max": 1000
+  },
+  "filterFractions": {
+    "lo": 0.25,
+    "hi": 0.75
+  },
+  "columnar": true,
+  "ingestMs": 15.094583000000002,
+  "index": {
+    "ms": 0.9922920000000026,
+    "bytes": 416388
+  },
+  "filter": {
+    "ms": 3.075792,
+    "activeCount": 50056
+  },
+  "clearMs": 2.15475,
+  "profile": null,
+  "timestamp": "2025-09-17T04:18:43.537Z"
+}

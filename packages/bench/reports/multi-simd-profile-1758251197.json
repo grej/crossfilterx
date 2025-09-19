@@ -1,0 +1,130 @@
+{
+  "scenario": "multi",
+  "rows": 5000000,
+  "dimensions": 6,
+  "columnar": true,
+  "range": {
+    "min": 0,
+    "max": 1000
+  },
+  "ingestMs": 366.477083,
+  "filterFractions": [
+    {
+      "dim": "dim0",
+      "lo": 0.15,
+      "hi": 0.85,
+      "bins": [
+        614,
+        3481
+      ]
+    },
+    {
+      "dim": "dim1",
+      "lo": 0.3,
+      "hi": 0.65,
+      "bins": [
+        1229,
+        2662
+      ]
+    },
+    {
+      "dim": "dim2",
+      "lo": 0.45,
+      "hi": 0.75,
+      "bins": [
+        1843,
+        3071
+      ]
+    }
+  ],
+  "index": [
+    {
+      "dim": "dim0",
+      "ms": 9.958750000000009,
+      "bytes": 20016388
+    },
+    {
+      "dim": "dim1",
+      "ms": 8.328250000000025,
+      "bytes": 20016388
+    },
+    {
+      "dim": "dim2",
+      "ms": 7.824917000000028,
+      "bytes": 20016388
+    }
+  ],
+  "filters": [
+    {
+      "dim": "dim0",
+      "ms": 0.0855420000000322,
+      "activeCount": 5000000,
+      "shardProfile": []
+    },
+    {
+      "dim": "dim1",
+      "ms": 105.20554100000004,
+      "activeCount": 3502277,
+      "shardProfile": []
+    },
+    {
+      "dim": "dim2",
+      "ms": 105.623875,
+      "activeCount": 1226532,
+      "shardProfile": []
+    }
+  ],
+  "clears": [
+    {
+      "dim": "dim0",
+      "ms": 103.50670899999989,
+      "activeCount": 3502277,
+      "profile": null,
+      "shardProfile": []
+    },
+    {
+      "dim": "dim1",
+      "ms": 105.74908400000004,
+      "activeCount": 1226532,
+      "profile": null,
+      "shardProfile": []
+    },
+    {
+      "dim": "dim2",
+      "ms": 138.65208299999995,
+      "activeCount": 368448,
+      "profile": null,
+      "shardProfile": []
+    }
+  ],
+  "shardSummary": {
+    "totalFlushes": 0,
+    "totalEvictions": 0,
+    "totalBins": 0,
+    "totalRows": 0,
+    "perDimension": [
+      {
+        "dim": "dim0",
+        "flushes": 0,
+        "evictions": 0,
+        "bins": 0,
+        "rows": 0
+      },
+      {
+        "dim": "dim1",
+        "flushes": 0,
+        "evictions": 0,
+        "bins": 0,
+        "rows": 0
+      },
+      {
+        "dim": "dim2",
+        "flushes": 0,
+        "evictions": 0,
+        "bins": 0,
+        "rows": 0
+      }
+    ]
+  },
+  "timestamp": "2025-09-19T03:06:39.334Z"
+}

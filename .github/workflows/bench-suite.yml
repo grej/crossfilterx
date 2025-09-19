@@ -1,0 +1,22 @@
+name: Bench Suite
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm install --prefer-offline
+      - run: node scripts/run-bench-suite.mjs
+      - uses: actions/upload-artifact@v3
+        with:
+          name: bench-reports
+          path: |
+            packages/bench/reports/*.json
+            packages/bench/reports-summary.json

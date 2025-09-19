@@ -1,0 +1,65 @@
+{
+  "timestamp": "2025-09-16T23:51:01.167Z",
+  "results": [
+    {
+      "rows": 100000,
+      "range": [
+        750,
+        2250
+      ],
+      "mode": "rows",
+      "crossfilterX": {
+        "ingestMs": 13.679167000000007,
+        "indexMs": 0.9230420000000095,
+        "filterMs": 1.4268339999999853,
+        "clearMs": 2.0823749999999563
+      },
+      "legacyCrossfilter": {
+        "ingestMs": 0.11091700000002902,
+        "filterMs": 2.8462499999999977,
+        "clearMs": 0.6947499999999991,
+        "activeCount": 63120
+      }
+    },
+    {
+      "rows": 200000,
+      "range": [
+        750,
+        2250
+      ],
+      "mode": "rows",
+      "crossfilterX": {
+        "ingestMs": 20.818917,
+        "indexMs": 1.1451250000000073,
+        "filterMs": 1.6350830000000087,
+        "clearMs": 3.07566700000001
+      },
+      "legacyCrossfilter": {
+        "ingestMs": 0.18500000000000227,
+        "filterMs": 1.0068750000000364,
+        "clearMs": 0.41733399999998255,
+        "activeCount": 125855
+      }
+    },
+    {
+      "rows": 500000,
+      "range": [
+        750,
+        2250
+      ],
+      "mode": "rows",
+      "crossfilterX": {
+        "ingestMs": 44.73537500000009,
+        "indexMs": 9.816459000000009,
+        "filterMs": 3.1132499999999936,
+        "clearMs": 5.738292000000001
+      },
+      "legacyCrossfilter": {
+        "ingestMs": 0.41537499999992633,
+        "filterMs": 2.8161250000000564,
+        "clearMs": 1.882333000000017,
+        "activeCount": 314215
+      }
+    }
+  ]
+}

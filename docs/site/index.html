@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CrossfilterX – Next-Gen Browser Filtering</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <h1>CrossfilterX</h1>
+      <p class="tagline">Deterministic, worker-powered filtering for 5–10M rows.</p>
+      <div class="cta">
+        <a href="#benchmarks" class="button">See Benchmarks</a>
+        <a href="/packages/demo/index.html" class="button secondary">Try the Airline Demo</a>
+      </div>
+    </header>
+
+    <section class="goals">
+      <h2>Why CrossfilterX?</h2>
+      <div class="grid">
+        <article>
+          <h3>Single-Core Consistency</h3>
+          <p>SharedArrayBuffer + Worker design keeps interactions deterministic and jank-free, even at 60 FPS.</p>
+        </article>
+        <article>
+          <h3>Drop-In Compatibility</h3>
+          <p>Adapter preserves the classic Crossfilter API, so existing dashboards move over with minimal code changes.</p>
+        </article>
+        <article>
+          <h3>Performance Guardrails</h3>
+          <p>Automated benchmarks catch regressions and document ingest, filter, and clear timings across dataset shapes.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="benchmarks" class="benchmarks">
+      <h2>Latest Benchmarks</h2>
+      <p>
+        Generated via <code>npm run bench</code>. Columnar ingest uses typed arrays to cut startup time; object-mode keeps
+        compatibility with legacy dashboards.
+      </p>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Dataset</th>
+              <th>Ingest</th>
+              <th>Index</th>
+              <th>Filter</th>
+              <th>Clear</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody id="bench-table"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="get-started">
+      <h2>Get Started</h2>
+      <ol>
+        <li><code>npm install</code></li>
+        <li><code>npm run bench</code> – generate fresh baseline metrics.</li>
+        <li><code>npm run demo</code> – launch the airline dashboard (set <code>VITE_COLUMNAR=1</code> for typed ingest).</li>
+      </ol>
+      <p>
+        See <code>BENCHMARKS.md</code> for detailed results and <code>16sepnextsteps.md</code> for the current roadmap.
+      </p>
+    </section>
+
+  <footer>
+    <p>CrossfilterX is an open-source project. Contributions welcome.</p>
+  </footer>
+  <script type="module">
+    const table = document.getElementById('bench-table');
+    async function fetchBenchmarks() {
+      try {
+        const response = await fetch('/packages/bench/reports-summary.json');
+        if (!response.ok) return;
+        const data = await response.json();
+        data.forEach((entry) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${entry.label}</td>
+            <td>${entry.ingest}</td>
+            <td>${entry.index}</td>
+            <td>${entry.filter}</td>
+            <td>${entry.clear}</td>
+            <td><code>${entry.report}</code></td>
+          `;
+          table?.appendChild(tr);
+        });
+      } catch (error) {
+        console.warn('Failed to load benchmark summary:', error);
+      }
+    }
+    fetchBenchmarks();
+    const refresh = document.createElement('button');
+    refresh.textContent = 'Refresh Benchmarks';
+    refresh.className = 'button secondary refresh';
+    refresh.addEventListener('click', () => {
+      table.innerHTML = '';
+      fetchBenchmarks();
+    });
+    document.querySelector('.benchmarks')?.append(refresh);
+  </script>
+  </body>
+</html>

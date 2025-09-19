@@ -1,0 +1,24 @@
+[package]
+name = "crossfilterx-kernels"
+version = "0.1.0"
+edition = "2021"
+description = "SIMD-ready WebAssembly helpers for CrossfilterX histogram updates"
+authors = ["CrossfilterX maintainers"]
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

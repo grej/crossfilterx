@@ -1,0 +1,158 @@
+[
+  {
+    "mode": "simd",
+    "rows": 1000000,
+    "dimensions": 6,
+    "iterations": 5,
+    "ingestMs": 83.201333,
+    "filterAvgMs": 0.013183399999996936,
+    "clearAvgMs": 8.597191600000002,
+    "samples": [
+      {
+        "filterMs": 0.03712500000000318,
+        "clearMs": 21.790125000000018,
+        "profile": null,
+        "activeCount": 799579,
+        "filterShardProfile": [],
+        "clearShardProfile": []
+      },
+      {
+        "filterMs": 0.004500000000007276,
+        "clearMs": 0.0009589999999946031,
+        "profile": null,
+        "activeCount": 799579,
+        "filterShardProfile": [],
+        "clearShardProfile": []
+      },
+      {
+        "filterMs": 0.000916999999986956,
+        "clearMs": 0.0006659999999953925,
+        "profile": null,
+        "activeCount": 799579,
+        "filterShardProfile": [],
+        "clearShardProfile": []
+      },
+      {
+        "filterMs": 0.01820900000001302,
+        "clearMs": 21.193416999999982,
+        "profile": {
+          "fallback": false,
+          "insideRows": 799579,
+          "outsideRows": 200421,
+          "insideMs": 2.7109159999999974,
+          "outsideMs": 2.826250000000016,
+          "totalMs": 5.537166000000013,
+          "outsideFraction": 0.200421,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000,
+        "filterShardProfile": [],
+        "clearShardProfile": [
+          {
+            "dim": 0,
+            "delta": 1,
+            "rows": 200421,
+            "copyMs": 1.1935829999999896,
+            "wasmMs": 1.046625000000006,
+            "metrics": {
+              "flushes": 4,
+              "evictions": 0,
+              "finalFlushes": 4,
+              "bins": 819,
+              "rows": 200421
+            }
+          },
+          {
+            "dim": 1,
+            "delta": 1,
+            "rows": 200421,
+            "copyMs": 0.26620900000000347,
+            "wasmMs": 1.9172910000000059,
+            "metrics": {
+              "flushes": 16,
+              "evictions": 0,
+              "finalFlushes": 16,
+              "bins": 4096,
+              "rows": 200421
+            }
+          },
+          {
+            "dim": 2,
+            "delta": 1,
+            "rows": 200421,
+            "copyMs": 0.6826250000000016,
+            "wasmMs": 1.906000000000006,
+            "metrics": {
+              "flushes": 16,
+              "evictions": 0,
+              "finalFlushes": 16,
+              "bins": 4096,
+              "rows": 200421
+            }
+          },
+          {
+            "dim": 3,
+            "delta": 1,
+            "rows": 200421,
+            "copyMs": 0.25720799999999144,
+            "wasmMs": 1.9268329999999878,
+            "metrics": {
+              "flushes": 16,
+              "evictions": 0,
+              "finalFlushes": 16,
+              "bins": 4096,
+              "rows": 200421
+            }
+          },
+          {
+            "dim": 4,
+            "delta": 1,
+            "rows": 200421,
+            "copyMs": 0.6668750000000045,
+            "wasmMs": 1.923374999999993,
+            "metrics": {
+              "flushes": 16,
+              "evictions": 0,
+              "finalFlushes": 16,
+              "bins": 4096,
+              "rows": 200421
+            }
+          },
+          {
+            "dim": 5,
+            "delta": 1,
+            "rows": 200421,
+            "copyMs": 0.6515410000000088,
+            "wasmMs": 1.916749999999979,
+            "metrics": {
+              "flushes": 16,
+              "evictions": 0,
+              "finalFlushes": 16,
+              "bins": 4096,
+              "rows": 200421
+            }
+          }
+        ]
+      },
+      {
+        "filterMs": 0.005165999999974247,
+        "clearMs": 0.0007910000000208584,
+        "profile": {
+          "fallback": false,
+          "insideRows": 799579,
+          "outsideRows": 200421,
+          "insideMs": 2.7109159999999974,
+          "outsideMs": 2.826250000000016,
+          "totalMs": 5.537166000000013,
+          "outsideFraction": 0.200421,
+          "rangeBins": 3277,
+          "buffered": false
+        },
+        "activeCount": 1000000,
+        "filterShardProfile": [],
+        "clearShardProfile": []
+      }
+    ]
+  }
+]

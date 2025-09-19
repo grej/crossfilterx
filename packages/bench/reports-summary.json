@@ -1,0 +1,59 @@
+[
+  {
+    "label": "1,000,000 × 6 (rows)",
+    "ingest": "190.49 ms",
+    "index": "3.70 ms",
+    "filter": "22.40 ms",
+    "clear": "19.89 ms",
+    "report": "baseline-1m-wideband-prof-buffered.json"
+  },
+  {
+    "label": "1,000,000 × 6 (rows)",
+    "ingest": "253.21 ms",
+    "index": "3.58 ms",
+    "filter": "21.57 ms",
+    "clear": "18.81 ms",
+    "report": "baseline-1m-wideband-prof-repeat.json"
+  },
+  {
+    "label": "1,000,000 × 6 (rows)",
+    "ingest": "214.61 ms",
+    "index": "3.61 ms",
+    "filter": "21.75 ms",
+    "clear": "18.95 ms",
+    "report": "baseline-1m-wideband-prof.json"
+  },
+  {
+    "label": "1,000,000 × 6 (rows)",
+    "ingest": "252.16 ms",
+    "index": "3.39 ms",
+    "filter": "21.77 ms",
+    "clear": "14.52 ms",
+    "report": "baseline-1m-wideband-prof2.json"
+  },
+  {
+    "label": "1,000,000 × 6 (rows)",
+    "ingest": "182.77 ms",
+    "index": "3.42 ms",
+    "filter": "21.76 ms",
+    "clear": "13.92 ms",
+    "report": "baseline-1m-wideband.json"
+  },
+  {
+    "label": "1,000,000 × 6 (rows)",
+    "ingest": "194.32 ms",
+    "index": "3.46 ms",
+    "filter": "18.88 ms",
+    "clear": "21.64 ms",
+    "report": "baseline-1m.json"
+  },
+  {
+    "label": "multi 5,000,000 × 6 (simd)",
+    "ingest": "380.17 ms",
+    "filterChain": "dim0:0.1ms → dim1:106.1ms → dim2:107.7ms",
+    "clearChain": "dim0:103.5ms → dim1:107.5ms → dim2:143.3ms",
+    "shardFlushes": 0,
+    "shardRows": 0,
+    "report": "multi-simd-profile-1758252849.json"
+  }
+]

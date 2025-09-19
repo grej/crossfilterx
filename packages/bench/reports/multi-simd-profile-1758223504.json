@@ -1,0 +1,101 @@
+{
+  "scenario": "multi",
+  "rows": 5000000,
+  "dimensions": 6,
+  "columnar": true,
+  "range": {
+    "min": 0,
+    "max": 1000
+  },
+  "ingestMs": 360.781666,
+  "filterFractions": [
+    {
+      "dim": "dim0",
+      "lo": 0.15,
+      "hi": 0.85,
+      "bins": [
+        614,
+        3481
+      ]
+    },
+    {
+      "dim": "dim1",
+      "lo": 0.3,
+      "hi": 0.65,
+      "bins": [
+        1229,
+        2662
+      ]
+    },
+    {
+      "dim": "dim2",
+      "lo": 0.45,
+      "hi": 0.75,
+      "bins": [
+        1843,
+        3071
+      ]
+    }
+  ],
+  "index": [
+    {
+      "dim": "dim0",
+      "ms": 9.59495800000002,
+      "bytes": 20016388
+    },
+    {
+      "dim": "dim1",
+      "ms": 7.942125000000033,
+      "bytes": 20016388
+    },
+    {
+      "dim": "dim2",
+      "ms": 8.145875000000046,
+      "bytes": 20016388
+    }
+  ],
+  "filters": [
+    {
+      "dim": "dim0",
+      "ms": 0.07604099999991831,
+      "activeCount": 5000000,
+      "shardProfile": []
+    },
+    {
+      "dim": "dim1",
+      "ms": 105.12024999999994,
+      "activeCount": 3501005,
+      "shardProfile": []
+    },
+    {
+      "dim": "dim2",
+      "ms": 106.72008300000005,
+      "activeCount": 1227237,
+      "shardProfile": []
+    }
+  ],
+  "clears": [
+    {
+      "dim": "dim0",
+      "ms": 102.02216599999997,
+      "activeCount": 3501005,
+      "profile": null,
+      "shardProfile": []
+    },
+    {
+      "dim": "dim1",
+      "ms": 102.48670900000002,
+      "activeCount": 1227237,
+      "profile": null,
+      "shardProfile": []
+    },
+    {
+      "dim": "dim2",
+      "ms": 137.04712499999994,
+      "activeCount": 368854,
+      "profile": null,
+      "shardProfile": []
+    }
+  ],
+  "timestamp": "2025-09-18T19:25:06.075Z"
+}
