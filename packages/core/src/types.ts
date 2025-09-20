@@ -5,11 +5,13 @@
  *   the demo import these types to ensure consistent contracts, while external
  *   consumers rely on the generated declarations.
  */
+import type { ClearPlannerSnapshot } from './worker/clear-planner';
 
 export type CFOptions = {
   mode?: 'worker';
   bins?: number;
   prewarmDims?: string[];
+  valueColumnNames?: string[];
 };
 
 export type TypedArray =
@@ -32,23 +34,49 @@ export type ColumnarData = {
 export interface DimensionHandle extends PromiseLike<DimensionHandle> {
   filter(rangeOrSet: [number, number] | Set<number>): DimensionHandle;
   clear(): DimensionHandle;
-  group(): GroupHandle;
+  group(options?: GroupOptions): GroupHandle;
+}
+
+export interface GroupOptions {
+  coarseTargetBins?: number; // e.g., 64 for a 64-bin coarse view
 }
 
 export interface GroupHandle {
-  bins(): Uint32Array;
+  bins(): Uint32Array; // Full resolution
   keys(): Uint16Array | Float32Array;
   count(): number;
+
+  // NEW: Returns null if no coarsening configured
+  coarse(): {
+    bins(): Uint32Array;
+    keys(): Uint16Array | Float32Array;
+  } | null;
+
+  reduceSum(valueAccessor: string | ((d: any) => number)): this;
+
+  all(): Array<{
+    key: string | number;
+    value: {
+      count: number;
+      sum?: number;
+      avg?: number;
+    };
+  }>;
+
+  top(k: number): Promise<Array<{ key: string | number; value: number }>>;
+
+  bottom(k: number): Promise<Array<{ key: string | number; value: number }>>;
 }
 
 export interface CFHandle {
   dimension(name: string | ((row: unknown) => number | string)): DimensionHandle;
-  group(name: string | DimensionHandle): GroupHandle;
+  group(name: string | DimensionHandle, options?: GroupOptions): GroupHandle;
   whenIdle(): Promise<void>;
   dispose(): void;
   buildIndex(name: string): Promise<void>;
   indexStatus(name: string): IndexStatus | undefined;
   profile(): ProfileSnapshot | null;
+  clearPlannerSnapshot(): ClearPlannerSnapshot;
 }
 
 export type IndexStatus = {

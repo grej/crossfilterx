@@ -9,12 +9,13 @@ export type BufferLayout = {
   refcount: Uint32Array;
   activeMask: Uint8Array;
   histograms: HistogramView[];
+  coarseHistograms: HistogramView[];
   byteLength: number;
 };
 
 export type LayoutPlan = {
   rowCount: number;
-  dimensions: Array<{ bins: number }>;
+  dimensions: Array<{ bins: number; coarseTargetBins?: number }>;
 };
 
 export function createLayout(plan: LayoutPlan): BufferLayout {
@@ -26,6 +27,7 @@ export function createLayout(plan: LayoutPlan): BufferLayout {
       refcount: new Uint32Array(0),
       activeMask: new Uint8Array(0),
       histograms: dimensions.map(() => ({ front: new Uint32Array(0), back: new Uint32Array(0) })),
+      coarseHistograms: dimensions.map(() => ({ front: new Uint32Array(0), back: new Uint32Array(0) })),
       byteLength: 0
     };
   }
@@ -55,10 +57,35 @@ export function createLayout(plan: LayoutPlan): BufferLayout {
     offset = allocator.align(offset);
     const front = offset;
     offset += dim.bins * 4;
+
+    // NEW: Coarse histogram allocation
+    let coarseFront: number | undefined;
+    let coarseBins: number | undefined;
+    if (dim.coarseTargetBins) {
+      coarseBins = Math.min(dim.coarseTargetBins, dim.bins);
+      coarseFront = offset;
+      offset += coarseBins * 4;
+    }
+
+    // Back buffers (same pattern)
     offset = allocator.align(offset);
     const back = offset;
     offset += dim.bins * 4;
-    return { front, back, bins: dim.bins };
+
+    let coarseBack: number | undefined;
+    if (dim.coarseTargetBins) {
+      coarseBack = offset;
+      offset += coarseBins! * 4;
+    }
+
+    return {
+      front,
+      back,
+      bins: dim.bins,
+      coarseFront,
+      coarseBack,
+      coarseBins
+    };
   });
 
   const totalBytes = allocator.align(offset);
@@ -73,6 +100,17 @@ export function createLayout(plan: LayoutPlan): BufferLayout {
     front: new Uint32Array(buffer, front, bins),
     back: new Uint32Array(buffer, back, bins)
   }));
+  const coarseHistograms: HistogramView[] = histogramOffsets.map(
+    ({ coarseFront, coarseBack, coarseBins }) => {
+      if (coarseFront && coarseBack && coarseBins) {
+        return {
+          front: new Uint32Array(buffer, coarseFront, coarseBins),
+          back: new Uint32Array(buffer, coarseBack, coarseBins)
+        };
+      }
+      return { front: new Uint32Array(0), back: new Uint32Array(0) };
+    }
+  );
 
   return {
     buffer,
@@ -80,6 +118,7 @@ export function createLayout(plan: LayoutPlan): BufferLayout {
     refcount,
     activeMask,
     histograms,
+    coarseHistograms,
     byteLength: totalBytes
   };
 }

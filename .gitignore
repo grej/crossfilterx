@@ -7,3 +7,5 @@ bench/reports/*.json
 bench/reports/*.csv
 packages/core/src/wasm/pkg/
 !packages/core/src/wasm/pkg/*.d.ts
+crossfilterx_context.txt
+digest.txt

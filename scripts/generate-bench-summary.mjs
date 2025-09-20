@@ -13,12 +13,15 @@ const baselineEntries = reports
 const summary = baselineEntries.map((file) => {
   const json = JSON.parse(readFileSync(path.join(reportsDir, file), 'utf8'));
   const label = `${json.rows.toLocaleString()} × ${json.dimensions} (${json.columnar ? 'columnar' : 'rows'})`;
+  const planner = json.plannerSnapshot ?? null;
   return {
     label,
     ingest: `${json.ingestMs.toFixed(2)} ms`,
     index: `${json.index.ms.toFixed(2)} ms`,
     filter: `${json.filter.ms.toFixed(2)} ms`,
     clear: `${json.clearMs.toFixed(2)} ms`,
+    simdCostPerRow: planner ? Number(planner.simdCostPerRow).toFixed(6) : undefined,
+    recomputeCostPerRow: planner ? Number(planner.recomputeCostPerRow).toFixed(6) : undefined,
     report: file,
   };
 });
@@ -37,6 +40,7 @@ if (multiReports.length > 0) {
     .map((entry) => `${entry.dim}:${entry.ms.toFixed(1)}ms`)
     .join(' → ');
   const shardSummary = json.shardSummary || { totalFlushes: 0, totalEvictions: 0, totalRows: 0 };
+  const planner = json.plannerSnapshot ?? null;
   summary.push({
     label: `multi ${json.rows.toLocaleString()} × ${json.dimensions} (simd)`,
     ingest: `${json.ingestMs.toFixed(2)} ms`,
@@ -44,6 +48,8 @@ if (multiReports.length > 0) {
     clearChain,
     shardFlushes: shardSummary.totalFlushes,
     shardRows: shardSummary.totalRows,
+    simdCostPerRow: planner ? Number(planner.simdCostPerRow).toFixed(6) : undefined,
+    recomputeCostPerRow: planner ? Number(planner.recomputeCostPerRow).toFixed(6) : undefined,
     report: latestMulti,
   });
 }

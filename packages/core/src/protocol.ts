@@ -9,12 +9,13 @@
  */
 
 export type MsgToWorker =
-  | { t: 'INGEST'; schema: DimSpec[]; rows: ArrayBuffer | unknown[] | ColumnarPayload }
+  | { t: 'INGEST'; schema: DimSpec[]; rows: ArrayBuffer | unknown[] | ColumnarPayload; valueColumnNames?: string[] }
   | { t: 'BUILD_INDEX'; dimId: number }
   | { t: 'FILTER_SET'; dimId: number; lo: number; hi: number; seq: number }
   | { t: 'FILTER_CLEAR'; dimId: number; seq: number }
   | { t: 'ESTIMATE'; dimId: number; lo: number; hi: number }
   | { t: 'SWAP' }
+  | { t: 'REQUEST_PLANNER' }
   | {
       t: 'ADD_DIMENSION';
       name: string;
@@ -24,6 +25,20 @@ export type MsgToWorker =
       scale?: QuantizeScale | null;
       labels?: string[] | null;
       fallback: number;
+    }
+  | {
+      t: 'GROUP_SET_REDUCTION';
+      dimId: number;
+      reduction: 'sum';
+      valueColumn: string; // Name of the column to aggregate
+      seq: number;
+    }
+  | {
+      t: 'GROUP_TOP_K';
+      dimId: number;
+      k: number;
+      isBottom: boolean;
+      seq: number;
     };
 
 export type MsgFromWorker =
@@ -32,12 +47,19 @@ export type MsgFromWorker =
   | { t: 'FRAME'; seq: number; activeCount: number; groups: GroupSnapshot[]; profile?: ProfileSnapshot | null }
   | { t: 'PROGRESS'; phase: string; done: number; total: number }
   | { t: 'DIMENSION_ADDED'; dimId: number; name: string; group: GroupSnapshot }
-  | { t: 'ERROR'; message: string };
+  | { t: 'PLANNER'; snapshot: ReturnType<ClearPlanner['snapshot']> }
+  | { t: 'ERROR'; message: string }
+  | {
+      t: 'TOP_K_RESULT';
+      seq: number;
+      results: Array<{ key: string | number; value: number }>;
+    };
 
 export type DimSpec = {
   name: string;
   type: 'number' | 'string';
   bits: number;
+  coarseTargetBins?: number; // NEW
 };
 
 export type DimMeta = {
@@ -51,27 +73,37 @@ export type GroupSnapshot = {
   byteOffset: number;
   binCount: number;
   count: number;
+  // NEW: Optional coarse histogram views
+  coarseBins?: ArrayBufferLike;
+  coarseByteOffset?: number;
+  coarseBinCount?: number;
+  sum?: ArrayBufferLike;
 };
 
 import { createLayout, type HistogramView } from './memory/layout';
-import { ingestRows, type ColumnDescriptor, type ColumnarSource } from './memory/ingest';
+import type { ColumnDescriptor } from './memory/ingest';
 import type { QuantizeScale } from './memory/quantize';
 import { buildCsr, type CsrIndex } from './indexers/csr';
 import { createHistogramSimdAccumulator, HistogramSimdAccumulator } from './wasm/simd';
 import type { ProfileSnapshot, TypedArray } from './types';
+import { ClearPlanner } from './worker/clear-planner';
+import {
+  createHistogramBuffers,
+  flushHistogramBuffers,
+  shouldBufferHistogramUpdate,
+  type HistogramBuffer,
+  type HistogramMode
+} from './worker/histogram-updater';
+import { computeTopK } from './worker/top-k';
+import { ingestDataset, binsForSpec, type ColumnarPayload } from './worker/ingest-executor';
 
-type HistogramMode = 'direct' | 'buffered' | 'auto' | 'simd';
+const BUFFER_THRESHOLD_ROWS = 32_768;
+const BUFFER_THRESHOLD_WORK = 1_048_576; // rows * dims
+
 const HISTOGRAM_MODE_FLAG = '__CFX_HIST_MODE' as const;
 const DEFAULT_HISTOGRAM_MODE: HistogramMode = 'auto';
-const BUFFER_THRESHOLD_ROWS = 2_000_000;
-const BUFFER_THRESHOLD_WORK = 12_000_000;
 
-export type ColumnarPayload = {
-  kind: 'columnar';
-  rowCount: number;
-  columns: Array<{ name: string; data: TypedArray }>;
-  categories?: Array<{ name: string; labels: string[] }>;
-};
+const DEBUG_MODE = Boolean((globalThis as any).__CFX_DEBUG || process?.env?.CFX_DEBUG);
 
 type EngineState = {
   rowCount: number;
@@ -80,6 +112,7 @@ type EngineState = {
   layout?: ReturnType<typeof createLayout>;
   columns: Uint16Array[];
   histograms: HistogramView[];
+  coarseHistograms: HistogramView[]; // NEW: Parallel array to histograms
   activeRows: Uint8Array;
   indexes: CsrIndex[];
   indexReady: boolean[];
@@ -89,23 +122,24 @@ type EngineState = {
   profiling: boolean;
   histogramMode: HistogramMode;
   simd: HistogramSimdAccumulator | null;
-  heuristic: {
-    deltaAvg: number;
-    deltaCount: number;
-    recomputeAvg: number;
-    recomputeCount: number;
-    simdCostPerRow: number;
-    simdSamples: number;
-    recomputeCostPerRow: number;
-    recomputeSamples: number;
-  };
+  planner: ClearPlanner;
+  reductions: Map<
+    number,
+    {
+      type: 'sum';
+      valueColumn: Float32Array; // Direct values, no quantization
+      sumBuffers: {
+        front: Float64Array; // Precision matters for large sums
+        back: Float64Array;
+      };
+    }
+  >;
+  valueColumns: Map<string, Float32Array>;
 };
 
 type ProfileCollector = {
   lastClear?: ProfileSnapshot['clear'];
 };
-
-type ColumnarSources = Map<string, ColumnarSource>;
 
 export function createProtocol(post: (message: MsgFromWorker) => void) {
   const profiling = Boolean((globalThis as { __CFX_PROFILE_CLEAR?: boolean }).__CFX_PROFILE_CLEAR);
@@ -116,6 +150,7 @@ export function createProtocol(post: (message: MsgFromWorker) => void) {
     layout: undefined,
     columns: [],
     histograms: [],
+    coarseHistograms: [],
     activeRows: new Uint8Array(0),
     indexes: [],
     indexReady: [],
@@ -125,16 +160,9 @@ export function createProtocol(post: (message: MsgFromWorker) => void) {
     profiling,
     histogramMode: resolveHistogramMode(),
     simd: null,
-    heuristic: {
-      deltaAvg: 0,
-      deltaCount: 0,
-      recomputeAvg: 0,
-      recomputeCount: 0,
-      simdCostPerRow: 0,
-      simdSamples: 0,
-      recomputeCostPerRow: 0,
-      recomputeSamples: 0
-    }
+    planner: new ClearPlanner(),
+    reductions: new Map(),
+    valueColumns: new Map()
   };
 
   return {
@@ -154,18 +182,68 @@ export function createProtocol(post: (message: MsgFromWorker) => void) {
         applyFilter(state, message.dimId, null);
         handleFrame(message.seq, state, post);
         break;
-      case 'ESTIMATE':
-      case 'SWAP':
-        // TODO: implement worker handlers
-        break;
-      case 'ADD_DIMENSION':
-        addDimension(state, message, post);
-        break;
-      default:
-        exhaustive(message);
+        case 'ESTIMATE':
+        case 'SWAP':
+          // TODO: implement worker handlers
+          break;
+        case 'REQUEST_PLANNER':
+          post({ t: 'PLANNER', snapshot: state.planner.snapshot() });
+          break;
+        case 'ADD_DIMENSION':
+          addDimension(state, message, post);
+          break;
+        case 'GROUP_SET_REDUCTION':
+          handleGroupSetReduction(message, state, post);
+          break;
+        case 'GROUP_TOP_K': {
+          const histogram = state.histograms[message.dimId].front;
+          const descriptor = state.descriptors[message.dimId];
+          const labels = descriptor.labels || (descriptor.dictionary ? Array.from(descriptor.dictionary.keys()) : undefined);
+
+          const results = computeTopK(histogram, message.k, labels, message.isBottom);
+
+          post({ t: 'TOP_K_RESULT', seq: message.seq, results });
+          break;
+        }
+        default:
+          exhaustive(message);
     }
+    },
+    plannerSnapshot(): ReturnType<ClearPlanner['snapshot']> {
+      return state.planner.snapshot();
+    }
+  };
+}
+
+function handleGroupSetReduction(
+  msg: Extract<MsgToWorker, { t: 'GROUP_SET_REDUCTION' }>,
+  state: EngineState,
+  post: (message: MsgFromWorker) => void
+) {
+  const { dimId, reduction, valueColumn, seq } = msg;
+  const { layout, reductions, rowCount } = state;
+
+  if (!layout) return;
+
+  const valueCol = state.valueColumns?.get(valueColumn);
+  if (!valueCol) {
+    // This should not happen if the value column was ingested correctly
+    return;
   }
-};
+
+  const sumBuffers = {
+    front: new Float64Array(layout.histograms[dimId].front.length),
+    back: new Float64Array(layout.histograms[dimId].back.length)
+  };
+
+  reductions.set(dimId, {
+    type: reduction,
+    valueColumn: valueCol,
+    sumBuffers
+  });
+
+  fullRecompute(state);
+  handleFrame(seq, state, post);
 }
 
 function handleIngest(
@@ -173,16 +251,10 @@ function handleIngest(
   state: EngineState,
   post: (message: MsgFromWorker) => void
 ) {
-  const columnarPayload = isColumnarPayload(msg.rows) ? msg.rows : null;
-  const columnar = columnarPayload ? buildColumnarSources(columnarPayload) : undefined;
   const rows = Array.isArray(msg.rows) ? (msg.rows as Record<string, unknown>[]) : [];
-  const rowCount = columnarPayload ? columnarPayload.rowCount : rows.length;
-  const descriptors = buildDescriptors(msg.schema, rows, columnar);
-  const layout = createLayout({
-    rowCount,
-    dimensions: msg.schema.map((dim) => ({ bins: resolveBinCount(dim) }))
-  });
-  const columns = ingestRows(rows, descriptors, layout.columns, columnar);
+  const columnarPayload = isColumnarPayload(msg.rows) ? msg.rows : undefined;
+  const ingestResult = ingestDataset({ schema: msg.schema, rows, columnarPayload, valueColumnNames: msg.valueColumnNames });
+  const { rowCount, descriptors, layout, columns, binsPerDimension, valueColumns } = ingestResult;
   const indexes = columns.map(() => null as unknown as CsrIndex);
 
   state.rowCount = rowCount;
@@ -191,6 +263,8 @@ function handleIngest(
   state.layout = layout;
   state.columns = columns;
   state.histograms = layout.histograms;
+  state.coarseHistograms = layout.coarseHistograms;
+  state.valueColumns = valueColumns ?? new Map();
   if (state.histogramMode === 'simd') {
     state.simd = createHistogramSimdAccumulator(columns, layout.histograms);
   } else {
@@ -207,9 +281,9 @@ function handleIngest(
   post({
     t: 'READY',
     n: state.rowCount,
-    dims: msg.schema.map((dim) => ({
+    dims: msg.schema.map((dim, index) => ({
       name: dim.name,
-      bins: resolveBinCount(dim)
+      bins: binsPerDimension[index]
     }))
   });
   handleFrame(0, state, post);
@@ -219,38 +293,27 @@ function isColumnarPayload(value: unknown): value is ColumnarPayload {
   return typeof value === 'object' && value !== null && (value as ColumnarPayload).kind === 'columnar';
 }
 
-function buildColumnarSources(payload: ColumnarPayload): ColumnarSources {
-  const map = new Map<string, ColumnarSource>();
-  const categoryLookup = new Map<string, string[]>();
-  if (payload.categories) {
-    for (const entry of payload.categories) {
-      categoryLookup.set(entry.name, entry.labels);
-    }
-  }
-  for (const column of payload.columns) {
-    const array = column.data;
-    if (array.length !== payload.rowCount) {
-      throw new Error(`Column "${column.name}" length mismatch (expected ${payload.rowCount}, got ${array.length}).`);
-    }
-    const labels = categoryLookup.get(column.name);
-    map.set(column.name, { data: array, labels });
-  }
-  return map;
-}
-
 function handleFrame(seq: number, state: EngineState, post: (message: MsgFromWorker) => void) {
   const profileSnapshot = state.profile?.lastClear ? { clear: state.profile.lastClear } : null;
   post({
     t: 'FRAME',
     seq,
     activeCount: state.activeCount,
-    groups: state.histograms.map((histogram, id) => ({
-      id,
-      bins: histogram.front.buffer,
-      byteOffset: histogram.front.byteOffset,
-      binCount: histogram.front.length,
-      count: state.activeCount
-    })),
+    groups: state.histograms.map((histogram, id) => {
+      const coarse = state.coarseHistograms[id];
+      const reduction = state.reductions.get(id);
+      return {
+        id,
+        bins: histogram.front.buffer,
+        byteOffset: histogram.front.byteOffset,
+        binCount: histogram.front.length,
+        count: state.activeCount,
+        coarseBins: coarse?.front.buffer,
+        coarseByteOffset: coarse?.front.byteOffset,
+        coarseBinCount: coarse?.front.length,
+        sum: reduction?.sumBuffers.front.buffer
+      };
+    }),
     profile: profileSnapshot
   });
 }
@@ -325,7 +388,23 @@ function applyFilter(state: EngineState, dimId: number, range: { lo: number; hi:
         const bin = columns[dim][row];
         histograms[dim].front[bin]++;
         histograms[dim].back[bin]++;
+
+        // NEW: Incremental coarse update (near-zero cost)
+        const coarse = state.coarseHistograms[dim];
+        if (coarse) {
+          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
+          const coarseIdx = Math.floor(bin / factor);
+          coarse.front[coarseIdx]++;
+          coarse.back[coarseIdx]++;
+        }
       }
+    }
+    // NEW: Update reductions incrementally
+    for (const [dimId, reduction] of state.reductions) {
+      const bin = columns[dimId][row];
+      const value = reduction.valueColumn[row];
+      reduction.sumBuffers.front[bin] += value;
+      reduction.sumBuffers.back[bin] += value;
     }
     state.activeCount++;
   }
@@ -341,7 +420,23 @@ function applyFilter(state: EngineState, dimId: number, range: { lo: number; hi:
         const bin = columns[dim][row];
         histograms[dim].front[bin]--;
         histograms[dim].back[bin]--;
+
+        // NEW: Incremental coarse update
+        const coarse = state.coarseHistograms[dim];
+        if (coarse) {
+          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
+          const coarseIdx = Math.floor(bin / factor);
+          coarse.front[coarseIdx]--;
+          coarse.back[coarseIdx]--;
+        }
       }
+    }
+    // NEW: Update reductions incrementally
+    for (const [dimId, reduction] of state.reductions) {
+      const bin = columns[dimId][row];
+      const value = reduction.valueColumn[row];
+      reduction.sumBuffers.front[bin] -= value;
+      reduction.sumBuffers.back[bin] -= value;
     }
     state.activeCount--;
   }
@@ -382,19 +477,22 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
   const allowBuffers = state.histogramMode !== 'simd';
   const allocateBuffers = allowBuffers && (buffersEnabled || collector !== null);
 
-  const otherFilters = countActiveFilters(state.filters);
-  let useDelta = shouldApplyDeltaClear({
+  const plan = state.planner.choose({
     insideCount,
     outsideCount,
     totalRows,
     histogramCount: state.histograms.length,
-    otherFilters,
+    otherFilters: countActiveFilters(state.filters),
     activeCount: state.activeCount,
-    stats: state.heuristic
   });
+  const useDelta = plan === 'delta';
 
-  if (state.histogramMode === 'simd' && outsideFraction < 0.55) {
-    useDelta = true;
+  if (DEBUG_MODE && !useDelta) {
+    console.log(
+      `[CrossfilterX Debug] Full recompute triggered. ` +
+        `Inside: ${insideCount}, Outside: ${outsideCount}, ` +
+        `Reason: ${plan === 'recompute' ? 'Planner decision' : 'Fallback'}`
+    );
   }
 
   if (!useDelta) {
@@ -411,7 +509,7 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
       };
     }
     fullRecompute(state);
-    recordHeuristic(state, 'recompute', performance.now() - recomputeStart, state.rowCount);
+    state.planner.record('recompute', performance.now() - recomputeStart, state.rowCount);
     return;
   }
 
@@ -456,7 +554,7 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
       rangeBins: removeHi >= removeLo ? removeHi - removeLo + 1 : 0,
       buffered: allowBuffers && buffersEnabled
     };
-    recordHeuristic(state, 'delta', totalMs, insideRowsVisited + outsideRowsVisited);
+    state.planner.record('delta', totalMs, insideRowsVisited + outsideRowsVisited);
   } else {
     const deltaStart = performance.now();
     let rowsVisited = 0;
@@ -483,7 +581,7 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
     }
     flushHistogramBuffers(outsideBuffers, histograms);
     flushSimd(state);
-    recordHeuristic(state, 'delta', performance.now() - deltaStart, rowsVisited);
+    state.planner.record('delta', performance.now() - deltaStart, rowsVisited);
   }
 
   function adjustRow(row: number, delta: -1 | 0, buffers?: HistogramBuffer[] | null) {
@@ -515,7 +613,23 @@ function activateRow(row: number, buffers?: HistogramBuffer[] | null) {
         const bin = columns[dim][row];
         histograms[dim].front[bin]++;
         histograms[dim].back[bin]++;
+
+        // NEW: Incremental coarse update (near-zero cost)
+        const coarse = state.coarseHistograms[dim];
+        if (coarse) {
+          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
+          const coarseIdx = Math.floor(bin / factor);
+          coarse.front[coarseIdx]++;
+          coarse.back[coarseIdx]++;
+        }
       }
+    }
+    // NEW: Update reductions incrementally
+    for (const [dimId, reduction] of state.reductions) {
+      const bin = columns[dimId][row];
+      const value = reduction.valueColumn[row];
+      reduction.sumBuffers.front[bin] += value;
+      reduction.sumBuffers.back[bin] += value;
     }
     state.activeCount++;
   }
@@ -535,7 +649,23 @@ function deactivateRow(row: number, buffers?: HistogramBuffer[] | null) {
         const bin = columns[dim][row];
         histograms[dim].front[bin]--;
         histograms[dim].back[bin]--;
+
+        // NEW: Incremental coarse update
+        const coarse = state.coarseHistograms[dim];
+        if (coarse) {
+          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
+          const coarseIdx = Math.floor(bin / factor);
+          coarse.front[coarseIdx]--;
+          coarse.back[coarseIdx]--;
+        }
       }
+    }
+    // NEW: Update reductions incrementally
+    for (const [dimId, reduction] of state.reductions) {
+      const bin = columns[dimId][row];
+      const value = reduction.valueColumn[row];
+      reduction.sumBuffers.front[bin] -= value;
+      reduction.sumBuffers.back[bin] -= value;
     }
     state.activeCount--;
   }
@@ -613,105 +743,9 @@ function flushHistogramBuffers(buffers: HistogramBuffer[] | null, histograms: Hi
   }
 }
 
-function recordHeuristic(
-  state: EngineState,
-  kind: 'delta' | 'recompute',
-  ms: number,
-  rowsProcessed?: number
-) {
-  if (!Number.isFinite(ms) || ms <= 0) return;
-  const stats = state.heuristic;
-  const alpha = 0.2;
-  const safeRows = rowsProcessed && rowsProcessed > 0 ? rowsProcessed : state.rowCount;
-  const costPerRow = safeRows > 0 ? ms / safeRows : 0;
-
-  if (kind === 'delta') {
-    stats.deltaAvg = stats.deltaCount > 0 ? stats.deltaAvg * (1 - alpha) + ms * alpha : ms;
-    stats.deltaCount++;
-    if (Number.isFinite(costPerRow) && costPerRow > 0) {
-      stats.simdCostPerRow =
-        stats.simdSamples > 0 ? stats.simdCostPerRow * (1 - alpha) + costPerRow * alpha : costPerRow;
-      stats.simdSamples++;
-    }
-  } else {
-    stats.recomputeAvg =
-      stats.recomputeCount > 0 ? stats.recomputeAvg * (1 - alpha) + ms * alpha : ms;
-    stats.recomputeCount++;
-    if (Number.isFinite(costPerRow) && costPerRow > 0) {
-      stats.recomputeCostPerRow =
-        stats.recomputeSamples > 0
-          ? stats.recomputeCostPerRow * (1 - alpha) + costPerRow * alpha
-          : costPerRow;
-      stats.recomputeSamples++;
-    }
-  }
-}
-
 function flushSimd(state: EngineState) {
   if (state.histogramMode !== 'simd') return;
   state.simd?.flush();
-}
-
-function shouldApplyDeltaClear(params: {
-  insideCount: number;
-  outsideCount: number;
-  totalRows: number;
-  histogramCount: number;
-  otherFilters: number;
-  activeCount: number;
-  stats: EngineState['heuristic'];
-}) {
-  const {
-    insideCount,
-    outsideCount,
-    totalRows,
-    histogramCount,
-    otherFilters,
-    activeCount,
-    stats
-  } = params;
-  if (totalRows === 0) return false;
-  const rowsTouched = insideCount + outsideCount;
-  const histCount = Math.max(1, histogramCount);
-  const outsideWeight = 1.1 + 0.15 * Math.min(4, otherFilters);
-  const outsideFraction = totalRows === 0 ? 0 : outsideCount / totalRows;
-  const activeFraction = Math.min(1, totalRows === 0 ? 0 : activeCount / totalRows);
-  const baselineSimd = (insideCount + outsideCount * outsideWeight) * histCount;
-  const effectiveFraction = Math.max(0.01, activeFraction);
-  const recomputeRows =
-    otherFilters > 0
-      ? Math.min(
-          totalRows,
-          Math.max(Math.max(1, activeCount), Math.round(totalRows * Math.pow(effectiveFraction, 0.85)))
-        )
-      : totalRows;
-  const recomputeWeight = otherFilters > 0 ? 0.9 + activeFraction * 0.6 : 1.1;
-  const baselineRecompute = recomputeRows * histCount * recomputeWeight;
-
-  const simdEstimate =
-    stats.simdSamples > 0 && Number.isFinite(stats.simdCostPerRow)
-      ? stats.simdCostPerRow * Math.max(1, rowsTouched)
-      : baselineSimd;
-
-  const recomputeEstimate =
-    stats.recomputeSamples > 0 && Number.isFinite(stats.recomputeCostPerRow)
-      ? stats.recomputeCostPerRow * Math.max(1, recomputeRows)
-      : baselineRecompute;
-
-  if (stats.simdSamples === 0 && stats.recomputeSamples === 0) {
-    if (otherFilters === 0 && outsideFraction > 0.35 && outsideFraction < 0.65) {
-      return false;
-    }
-    if (otherFilters === 0 && insideCount < totalRows * 0.2 && outsideFraction > 0.6) {
-      return false;
-    }
-    if (otherFilters > 0 && activeFraction < 0.05 && outsideFraction < 0.5) {
-      return false;
-    }
-    return simdEstimate <= recomputeEstimate;
-  }
-
-  return simdEstimate <= recomputeEstimate;
 }
 
 function fullRecompute(state: EngineState) {
@@ -721,12 +755,16 @@ function fullRecompute(state: EngineState) {
     return;
   }
 
-  const { columns, histograms, filters } = state;
+  const { columns, histograms, filters, reductions } = state;
   const rowCount = state.rowCount;
 
   for (const histogram of histograms) {
     histogram.front.fill(0);
     histogram.back.fill(0);
+  }
+  for (const reduction of reductions.values()) {
+    reduction.sumBuffers.front.fill(0);
+    reduction.sumBuffers.back.fill(0);
   }
   layout.refcount.fill(0);
   layout.activeMask.fill(0);
@@ -746,130 +784,37 @@ function fullRecompute(state: EngineState) {
       histograms[dim].front[bin]++;
       histograms[dim].back[bin]++;
     }
+    for (const [dimId, reduction] of reductions) {
+      const bin = columns[dimId][row];
+      const value = reduction.valueColumn[row];
+      reduction.sumBuffers.front[bin] += value;
+      reduction.sumBuffers.back[bin] += value;
+    }
   }
 
   state.activeCount = activeCount;
+
+  // NEW: Compute coarse histograms from fine
+  for (let dim = 0; dim < state.histograms.length; dim++) {
+    const coarse = state.coarseHistograms[dim];
+    if (!coarse || coarse.front.length === 0) continue;
+
+    const fine = state.histograms[dim];
+    const factor = Math.ceil(fine.front.length / coarse.front.length);
+
+    coarse.front.fill(0);
+    coarse.back.fill(0);
+
+    for (let i = 0; i < fine.front.length; i++) {
+      const coarseIdx = Math.floor(i / factor);
+      coarse.front[coarseIdx] += fine.front[i];
+      coarse.back[coarseIdx] += fine.back[i];
+    }
+  }
 }
 
 function exhaustive(value: never): never {
   throw new Error(`Unhandled message type: ${JSON.stringify(value)}`);
-}
-
-function buildDescriptors(schema: DimSpec[], rows: Record<string, unknown>[], columnar?: ColumnarSources) {
-  const dimensionCount = schema.length;
-  const binCounts = schema.map(resolveBinCount);
-  const descriptors: ColumnDescriptor[] = new Array(dimensionCount);
-
-  const minValues = new Array<number>(dimensionCount).fill(Number.POSITIVE_INFINITY);
-  const maxValues = new Array<number>(dimensionCount).fill(Number.NEGATIVE_INFINITY);
-  const dictionaries = new Array<Map<string, number> | undefined>(dimensionCount);
-  const nextCodes = new Array<number>(dimensionCount).fill(0);
-  const fallbackBins = new Array<number>(dimensionCount).fill(0);
-
-  const numericDims: number[] = [];
-  const stringDims: number[] = [];
-
-  for (let dim = 0; dim < dimensionCount; dim++) {
-    const spec = schema[dim];
-    if (spec.type === 'number') {
-      numericDims.push(dim);
-    } else {
-      stringDims.push(dim);
-      dictionaries[dim] = new Map<string, number>();
-      const bins = binCounts[dim];
-      fallbackBins[dim] = bins > 0 ? bins - 1 : 0;
-    }
-  }
-
-  if (columnar) {
-    for (const dim of numericDims) {
-      const source = columnar.get(schema[dim].name);
-      if (!source) continue;
-      const data = source.data;
-      for (let i = 0; i < data.length; i++) {
-        const value = Number(data[i]);
-        if (!Number.isFinite(value)) continue;
-        if (value < minValues[dim]) minValues[dim] = value;
-        if (value > maxValues[dim]) maxValues[dim] = value;
-      }
-    }
-    for (const dim of stringDims) {
-      const source = columnar.get(schema[dim].name);
-      if (!source?.labels) {
-        throw new Error(`Columnar dataset missing categories for dimension "${schema[dim].name}".`);
-      }
-      const dictionary = dictionaries[dim] ?? new Map<string, number>();
-      dictionaries[dim] = dictionary;
-      const labels = source.labels;
-      for (let idx = 0; idx < labels.length; idx++) {
-        dictionary.set(labels[idx], idx);
-      }
-      fallbackBins[dim] = labels.length > 0 ? labels.length - 1 : 0;
-    }
-  } else {
-    for (const row of rows) {
-      for (const dim of numericDims) {
-        const value = Number(row[schema[dim].name]);
-        if (!Number.isFinite(value)) continue;
-        if (value < minValues[dim]) minValues[dim] = value;
-        if (value > maxValues[dim]) maxValues[dim] = value;
-      }
-
-      for (const dim of stringDims) {
-        const raw = row[schema[dim].name];
-        const key = raw === undefined ? '' : String(raw);
-        const dictionary = dictionaries[dim]!;
-        if (dictionary.has(key)) continue;
-        const limit = binCounts[dim];
-        const next = nextCodes[dim];
-        if (next < limit) {
-          dictionary.set(key, next);
-          nextCodes[dim] = next + 1;
-        } else {
-          dictionary.set(key, fallbackBins[dim]);
-        }
-      }
-    }
-  }
-
-  for (let dim = 0; dim < dimensionCount; dim++) {
-    const spec = schema[dim];
-    const bins = binCounts[dim];
-    const bits = Math.ceil(Math.log2(bins));
-    if (spec.type === 'number') {
-      let min = minValues[dim];
-      let max = maxValues[dim];
-      if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) {
-        min = 0;
-        max = bins;
-      }
-      const range = (1 << bits) - 1;
-      const span = max - min;
-      const safeSpan = span > 0 && Number.isFinite(span) ? span : 1;
-      const invSpan = range / safeSpan;
-      descriptors[dim] = {
-        name: spec.name,
-        scale: { min, max, bits, range, invSpan }
-      };
-    } else {
-      const dictionary = dictionaries[dim] ?? new Map<string, number>();
-      descriptors[dim] = {
-        name: spec.name,
-        dictionary,
-        dictionaryFallback: fallbackBins[dim]
-      };
-      if (columnar) {
-        const labels = columnar.get(spec.name)?.labels;
-        if (labels) descriptors[dim].labels = labels;
-      }
-    }
-  }
-
-  return descriptors;
-}
-
-function resolveBinCount(dim: DimSpec) {
-  return Math.max(1, 1 << Math.min(dim.bits, 16));
 }
 
 function diffRanges(

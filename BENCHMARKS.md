@@ -73,6 +73,7 @@ Run `npm run bench:micro` (optionally with `MICRO_OUTPUT=...`) to build the work
 
 - Reports: `baseline-1758123825921.json`, `baseline-1758123839222.json`, and `multi-simd-profile-*.json` under `packages/bench/reports/`.
 - The shard summary confirms that after the cache tweak, even the forced-SIMD run flushed only a dozen shards per dimension (zero evictions); the slowdown comes purely from visiting ~2.3 M rows per clear. When the adaptive heuristic reverts to recompute, clear latency drops back to ~100–140 ms.
+- Each report now includes the planner’s learned `simdCostPerRow` and `recomputeCostPerRow`. When chunking and heuristics settle, these values roughly stabilise around `~1.9e-5` vs. `~2.1e-5` for the 5 M runs, making it clear why recompute wins once outside fractions dominate.
 
 Run `node scripts/generate-bench-summary.mjs` to refresh `packages/bench/reports-summary.json`. The summary now includes the most recent multi-filter profile with its shard counts so CI and docs can surface regressions at a glance.
 

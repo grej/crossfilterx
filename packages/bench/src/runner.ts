@@ -13,6 +13,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { buildUniformColumnar, buildUniformRows } from './datasets.js';
+import type { ClearPlannerSnapshot } from '../../core/src/worker/clear-planner.js';
 
 const env = ((globalThis as unknown as { process?: { env?: Record<string, string> } }).process?.env ?? {}) as Record<string, string>;
 const ROWS = Number(env.BENCH_ROWS ?? '100000');
@@ -63,6 +64,7 @@ type SingleScenarioResult = {
   clearActiveCount: number;
   profile: unknown;
   shardProfile?: HistogramShardSample[];
+  plannerSnapshot?: ClearPlannerSnapshot;
   timestamp: string;
 };
 
@@ -78,6 +80,7 @@ type MultiScenarioResult = {
   filters: Array<{ dim: string; ms: number; activeCount: number; shardProfile?: HistogramShardSample[] }>;
   clears: Array<{ dim: string; ms: number; activeCount: number; profile: unknown; shardProfile?: HistogramShardSample[] }>;
   shardSummary?: HistogramShardSummary;
+  plannerSnapshot?: ClearPlannerSnapshot;
   timestamp: string;
 };
 
@@ -252,6 +255,7 @@ async function runSingleScenario(
     clearActiveCount,
     profile: profileSnapshot,
     shardProfile,
+    plannerSnapshot: typeof cf.clearPlannerSnapshot === 'function' ? cf.clearPlannerSnapshot() : undefined,
     timestamp: new Date().toISOString()
   };
 }
@@ -323,6 +327,7 @@ async function runMultiScenario(
     filters: filterSnapshots,
     clears: clearSnapshots,
     shardSummary,
+    plannerSnapshot: typeof cf.clearPlannerSnapshot === 'function' ? cf.clearPlannerSnapshot() : undefined,
     timestamp: new Date().toISOString()
   };
 }

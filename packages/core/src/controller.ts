@@ -1,13 +1,8 @@
 import type { CFOptions, ColumnarData, TypedArray, ProfileSnapshot } from './types';
 import { quantize, type QuantizeScale } from './memory/quantize';
-import {
-  createProtocol,
-  type ColumnarPayload,
-  type DimSpec,
-  type GroupSnapshot,
-  type MsgFromWorker,
-  type MsgToWorker
-} from './protocol';
+import { createProtocol, type DimSpec, type GroupSnapshot, type MsgFromWorker, type MsgToWorker } from './protocol';
+import type { ColumnarPayload } from './worker/ingest-executor';
+import type { ClearPlannerSnapshot } from './worker/clear-planner';
 
 export type DimensionSpec = DimSpec;
 
@@ -15,11 +10,16 @@ type GroupState = {
   bins: Uint32Array;
   keys: Uint16Array | Float32Array;
   count: number;
+  coarse?: {
+    bins: Uint32Array;
+    keys: Uint16Array | Float32Array;
+  };
+  sum?: Float64Array;
 };
 
 type FrameResolver = () => void;
 
-type WorkerLike = {
+type WorkerBridge = {
   postMessage: (message: MsgToWorker) => void;
   terminate: () => void;
   onmessage: ((event: MessageEvent<MsgFromWorker>) => void) | null;
@@ -30,7 +30,8 @@ export type IngestSource =
   | { kind: 'columnar'; data: ColumnarData };
 
 export class WorkerController {
-  private readonly worker: WorkerLike;
+  private readonly worker: WorkerBridge;
+  private readonly plannerSnapshotFn: () => ClearPlannerSnapshot;
   private readonly dimsByName = new Map<string, number>();
   private readonly groupState = new Map<number, GroupState>();
   private readonly indexInfo = new Map<number, { ready: boolean; ms?: number; bytes?: number }>();
@@ -49,13 +50,17 @@ export class WorkerController {
   private readonly schema: DimensionSpec[];
   private functionCounter = 0;
   private readonly pendingDimensionResolvers = new Map<string, (dimId: number, snapshot: GroupSnapshot) => void>();
+  private readonly topKResolvers = new Map<number, (results: Array<{ key: string | number; value: number }>) => void>();
   private readonly filterState = new Map<number, [number, number]>();
+  private plannerSnapshotCache: ClearPlannerSnapshot = createEmptyPlannerSnapshot();
 
   constructor(schema: DimensionSpec[], source: IngestSource, _options: CFOptions) {
     this.source = source;
     this.options = _options;
     this.schema = [...schema];
-    this.worker = createWorkerInstance();
+    const bridge = createWorkerInstance();
+    this.worker = bridge.worker;
+    this.plannerSnapshotFn = bridge.plannerSnapshot;
     this.worker.onmessage = (event) => {
       this.handleMessage(event.data as MsgFromWorker);
     };
@@ -73,7 +78,8 @@ export class WorkerController {
     this.trackFrame({
       t: 'INGEST',
       schema,
-      rows: prepareRowsPayload(source)
+      rows: prepareRowsPayload(source),
+      valueColumnNames: _options.valueColumnNames
     });
   }
 
@@ -146,6 +152,19 @@ export class WorkerController {
     return this.lastProfile;
   }
 
+  plannerSnapshot(): ClearPlannerSnapshot {
+    const snapshot = this.plannerSnapshotFn();
+    if (snapshot) {
+      this.plannerSnapshotCache = snapshot;
+    }
+    try {
+      this.worker.postMessage({ t: 'REQUEST_PLANNER' } as MsgToWorker);
+    } catch (error) {
+      // ignore
+    }
+    return this.plannerSnapshotCache;
+  }
+
   async buildIndex(dimId: number) {
     await this.readyPromise;
     if (this.indexInfo.get(dimId)?.ready) return Promise.resolve();
@@ -155,6 +174,33 @@ export class WorkerController {
       this.indexResolvers.set(dimId, resolvers);
       this.worker.postMessage({ t: 'BUILD_INDEX', dimId });
     });
+  }
+
+  async setReduction(dimId: number, reduction: 'sum', valueColumn: string) {
+    await this.readyPromise;
+    return this.trackFrame({
+      t: 'GROUP_SET_REDUCTION',
+      dimId,
+      reduction,
+      valueColumn,
+      seq: this.nextSeq()
+    });
+  }
+
+  async getTopK(dimId: number, k: number, isBottom: boolean): Promise<Array<{ key: string | number; value: number }>> {
+    await this.readyPromise;
+    const seq = this.nextSeq();
+    const promise = new Promise<Array<{ key: string | number; value: number }>>((resolve) => {
+      this.topKResolvers.set(seq, resolve);
+    });
+    this.worker.postMessage({
+      t: 'GROUP_TOP_K',
+      dimId,
+      k,
+      isBottom,
+      seq
+    });
+    return promise;
   }
 
   createFunctionDimension(accessor: (row: Record<string, unknown>) => unknown): Promise<number> {
@@ -223,6 +269,17 @@ export class WorkerController {
       case 'DIMENSION_ADDED':
         this.handleDimensionAdded(message);
         break;
+      case 'TOP_K_RESULT': {
+        const resolver = this.topKResolvers.get(message.seq);
+        if (resolver) {
+          resolver(message.results);
+          this.topKResolvers.delete(message.seq);
+        }
+        break;
+      }
+      case 'PLANNER':
+        this.plannerSnapshotCache = message.snapshot;
+        break;
       case 'PROGRESS':
         // fall through for now
         break;
@@ -263,6 +320,24 @@ export class WorkerController {
         state.keys = createKeys(state.bins.length);
       }
       state.count = snapshot.count;
+
+      if (snapshot.coarseBins && snapshot.coarseByteOffset !== undefined && snapshot.coarseBinCount !== undefined) {
+        const coarseIncoming = new Uint32Array(
+          snapshot.coarseBins,
+          snapshot.coarseByteOffset,
+          snapshot.coarseBinCount
+        );
+        if (!state.coarse || state.coarse.bins.buffer !== coarseIncoming.buffer) {
+          state.coarse = {
+            bins: coarseIncoming,
+            keys: createKeys(coarseIncoming.length)
+          };
+        }
+      }
+
+      if (snapshot.sum) {
+        state.sum = new Float64Array(snapshot.sum);
+      }
     }
   }
 
@@ -317,6 +392,12 @@ export class WorkerController {
 
   private buildDerivedColumn(name: string, accessor: (row: Record<string, unknown>) => unknown) {
     const rowCount = this.getRowCount();
+    if (rowCount > 250_000) {
+      console.warn(
+        `[CrossfilterX] Creating function dimension on ${rowCount} rows. ` +
+          `This may block the UI thread. Consider pre-computing this dimension.`
+      );
+    }
     const values = new Array<unknown>(rowCount);
     this.forEachRow((row, index) => {
       values[index] = accessor(row);
@@ -489,36 +570,71 @@ function createKeys(length: number): Uint16Array | Float32Array {
   return keys;
 }
 
-function createWorkerInstance(): WorkerLike {
+function createWorkerInstance(): { worker: WorkerBridge; plannerSnapshot: () => ClearPlannerSnapshot } {
+  let lastSnapshot = createEmptyPlannerSnapshot();
+
   if (typeof Worker === 'function' && typeof window !== 'undefined') {
     const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
-    return {
-      postMessage: (message) => worker.postMessage(message),
-      terminate: () => worker.terminate(),
-      get onmessage() {
-        return worker.onmessage as ((event: MessageEvent<MsgFromWorker>) => void) | null;
-      },
-      set onmessage(handler) {
-        worker.onmessage = handler;
+    let listener: ((event: MessageEvent<MsgFromWorker>) => void) | null = null;
+    worker.onmessage = (event) => {
+      const data = event.data as MsgFromWorker;
+      if (data && typeof data === 'object' && data.t === 'PLANNER') {
+        lastSnapshot = data.snapshot;
       }
+      listener?.(event as MessageEvent<MsgFromWorker>);
+    };
+    return {
+      worker: {
+        postMessage: (message) => worker.postMessage(message),
+        terminate: () => worker.terminate(),
+        get onmessage() {
+          return listener;
+        },
+        set onmessage(handler) {
+          listener = handler;
+        }
+      },
+      plannerSnapshot: () => lastSnapshot
     };
   }
 
   let listener: ((event: MessageEvent<MsgFromWorker>) => void) | null = null;
   const protocol = createProtocol((message) => {
+    if (message.t === 'PLANNER') {
+      lastSnapshot = message.snapshot;
+    }
     listener?.({ data: message } as MessageEvent<MsgFromWorker>);
   });
 
   return {
-    postMessage(message) {
-      protocol.handleMessage(message);
+    worker: {
+      postMessage(message) {
+        protocol.handleMessage(message);
+      },
+      terminate() {},
+      get onmessage() {
+        return listener;
+      },
+      set onmessage(handler) {
+        listener = handler;
+      }
     },
-    terminate() {},
-    get onmessage() {
-      return listener;
-    },
-    set onmessage(handler) {
-      listener = handler;
+    plannerSnapshot: () => {
+      lastSnapshot = protocol.plannerSnapshot();
+      return lastSnapshot;
     }
+  };
+}
+
+function createEmptyPlannerSnapshot(): ClearPlannerSnapshot {
+  return {
+    deltaAvg: 0,
+    deltaCount: 0,
+    recomputeAvg: 0,
+    recomputeCount: 0,
+    simdCostPerRow: 0,
+    simdSamples: 0,
+    recomputeCostPerRow: 0,
+    recomputeSamples: 0,
   };
 }

@@ -49,6 +49,8 @@
               <th>Index</th>
               <th>Filter</th>
               <th>Clear</th>
+              <th>SIMD Cost</th>
+              <th>Recompute Cost</th>
               <th>Notes</th>
             </tr>
           </thead>
@@ -85,8 +87,10 @@
             <td>${entry.label}</td>
             <td>${entry.ingest}</td>
             <td>${entry.index}</td>
-            <td>${entry.filter}</td>
-            <td>${entry.clear}</td>
+            <td>${entry.filter ?? entry.filterChain ?? '–'}</td>
+            <td>${entry.clear ?? entry.clearChain ?? '–'}</td>
+            <td>${entry.simdCostPerRow ?? '–'}</td>
+            <td>${entry.recomputeCostPerRow ?? '–'}</td>
             <td><code>${entry.report}</code></td>
           `;
           table?.appendChild(tr);

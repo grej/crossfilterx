@@ -28,6 +28,9 @@ const isNode = Boolean(
     (globalThis as { process?: { versions?: { node?: string } } }).process?.versions?.node
 );
 
+// Chunking keeps very large clears from routing millions of rows through a single
+// wasm call. Threshold/size are tuned for a balance between overhead and cache
+// locality; they can be revisited as part of future tuning.
 const WASM_CHUNK_THRESHOLD = 262_144; // rows
 const WASM_CHUNK_SIZE = 131_072;
 
@@ -207,7 +210,7 @@ function applyWithWasm(
       let totalCopy = 0;
       let totalWasm = 0;
       let aggregatedMetrics: unknown = null;
-      const chunkSize = count > WASM_CHUNK_THRESHOLD ? WASM_CHUNK_SIZE : count;
+      const chunkSize = Math.max(1, count > WASM_CHUNK_THRESHOLD ? WASM_CHUNK_SIZE : count);
       const iterations = Math.ceil(count / chunkSize);
       for (let iter = 0; iter < iterations; iter++) {
         const offset = iter * chunkSize;

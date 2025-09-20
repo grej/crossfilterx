@@ -41,6 +41,14 @@ app.innerHTML = `
       <span>Ingest Time</span>
       <strong>–</strong>
     </div>
+    <div class="summary-card" data-summary="simd-cost">
+      <span>SIMD Cost/Row</span>
+      <strong>–</strong>
+    </div>
+    <div class="summary-card" data-summary="recompute-cost">
+      <span>Recompute Cost/Row</span>
+      <strong>–</strong>
+    </div>
   </section>
   <section class="controls">
     <label>Distance Range</label>
@@ -65,6 +73,8 @@ const summaries = {
   filter: app.querySelector<HTMLDivElement>('[data-summary="filter"] strong')!,
   delay: app.querySelector<HTMLDivElement>('[data-summary="delay"] strong')!,
   ingest: app.querySelector<HTMLDivElement>('[data-summary="ingest"] strong')!,
+  simdCost: app.querySelector<HTMLDivElement>('[data-summary="simd-cost"] strong')!,
+  recomputeCost: app.querySelector<HTMLDivElement>('[data-summary="recompute-cost"] strong')!,
 };
 
 const sliders = {
@@ -128,7 +138,8 @@ function render() {
   summaries.rows.textContent = formatNumber(ROW_COUNT);
   summaries.filter.textContent = `${formatNumber(activeCount)} (${((activeCount / ROW_COUNT) * 100).toFixed(1)}%)`;
   summaries.delay.textContent = renderAverageHour();
-summaries.ingest.textContent = `${ingestDuration.toFixed(1)} ms (${columnarActive ? 'columnar' : 'rows'})`;
+  summaries.ingest.textContent = `${ingestDuration.toFixed(1)} ms (${columnarActive ? 'columnar' : 'rows'})`;
+  updatePlannerSummary();
 
   drawHistogram(
     canvases.distance,
@@ -136,6 +147,33 @@ summaries.ingest.textContent = `${ingestDuration.toFixed(1)} ms (${columnarActiv
     '#38bdf8'
   );
   drawBars(canvases.carrier, extractCarriers(), '#f97316');
+}
+
+let lastPlannerKey = '';
+function updatePlannerSummary() {
+  if (typeof cf.clearPlannerSnapshot !== 'function') {
+    summaries.simdCost.textContent = '–';
+    summaries.recomputeCost.textContent = '–';
+    return;
+  }
+  const snapshot = cf.clearPlannerSnapshot();
+  const key = `${snapshot.simdCostPerRow}:${snapshot.recomputeCostPerRow}:${snapshot.simdSamples}:${snapshot.recomputeSamples}`;
+  if (key === lastPlannerKey) {
+    if (snapshot.simdSamples === 0 || snapshot.recomputeSamples === 0) {
+      setTimeout(updatePlannerSummary, 200);
+    }
+    return;
+  }
+  lastPlannerKey = key;
+  summaries.simdCost.textContent = snapshot.simdSamples
+    ? `${snapshot.simdCostPerRow.toExponential(2)} (${snapshot.simdSamples})`
+    : '…';
+  summaries.recomputeCost.textContent = snapshot.recomputeSamples
+    ? `${snapshot.recomputeCostPerRow.toExponential(2)} (${snapshot.recomputeSamples})`
+    : '…';
+  if (snapshot.simdSamples === 0 || snapshot.recomputeSamples === 0) {
+    setTimeout(updatePlannerSummary, 200);
+  }
 }
 
 function renderAverageHour() {
