@@ -30,6 +30,53 @@ export type IngestSource =
   | { kind: 'rows'; data: Record<string, unknown>[] }
   | { kind: 'columnar'; data: ColumnarData };
 
+/**
+ * Default histogram resolution in bits.
+ *
+ * 12 bits = 4096 bins, providing good balance between:
+ * - Memory usage: 4096 bins × 4 bytes = 16KB per dimension
+ * - Precision: 0.024% resolution for continuous data
+ * - Performance: Reasonable computation time for most datasets
+ *
+ * Users can override this via the `bins` option in crossfilterX().
+ */
+const DEFAULT_BITS = 12;
+
+/**
+ * Maximum histogram resolution in bits.
+ *
+ * 16 bits = 65536 bins is the hard limit because:
+ * - Histogram bins are stored as Uint16Array indices
+ * - Beyond 16 bits, memory usage becomes prohibitive (256KB+ per dimension)
+ * - Diminishing returns: most visualizations don't benefit from >16-bit precision
+ */
+const MAX_BITS = 16;
+
+/**
+ * Row count threshold that triggers UI blocking warning.
+ *
+ * Function-based dimensions (e.g., `dim((d) => d.computed)`) must process
+ * every row on the main thread to extract values. Beyond 250K rows, this
+ * can cause noticeable UI lag.
+ *
+ * Users should pre-compute these columns and include them in the dataset
+ * rather than using function accessors for large datasets.
+ */
+const UI_BLOCKING_THRESHOLD = 250_000;
+
+/**
+ * Maximum unique categories for function-based dimensions.
+ *
+ * Category codes are stored as Uint16Array, limiting us to 65535 (0xFFFF)
+ * unique values. This is typically sufficient for categorical data like:
+ * - Countries, states, cities
+ * - Product categories, SKUs
+ * - User segments, tags
+ *
+ * If you need more categories, restructure as a numeric dimension or use hashing.
+ */
+const MAX_CATEGORIES = 0xffff;
+
 export class WorkerController {
   private readonly logger = createLogger('Controller');
   private readonly worker: WorkerBridge;
@@ -436,14 +483,14 @@ export class WorkerController {
 
   private resolveBitsLocal() {
     const bins = this.options.bins;
-    if (!bins) return 12;
+    if (!bins) return DEFAULT_BITS;
     const bits = Math.ceil(Math.log2(bins));
-    return Math.max(1, Math.min(16, bits));
+    return Math.max(1, Math.min(MAX_BITS, bits));
   }
 
   private buildDerivedColumn(name: string, accessor: (row: Record<string, unknown>) => unknown) {
     const rowCount = this.getRowCount();
-    if (rowCount > 250_000) {
+    if (rowCount > UI_BLOCKING_THRESHOLD) {
       console.warn(
         `[CrossfilterX] Creating function dimension on ${rowCount} rows. ` +
           `This may block the UI thread. Consider pre-computing this dimension.`
@@ -506,8 +553,8 @@ export class WorkerController {
       let code = dictionary.get(key);
       if (code === undefined) {
         code = labels.length;
-        if (code > 0xffff) {
-          throw new Error('Function-based dimension exceeded 65535 unique categories.');
+        if (code > MAX_CATEGORIES) {
+          throw new Error(`Function-based dimension exceeded ${MAX_CATEGORIES} unique categories.`);
         }
         dictionary.set(key, code);
         labels.push(key);
@@ -594,7 +641,7 @@ function ensureTypedArray(array: TypedArray): TypedArray {
 }
 
 function createGroupState(bits: number): GroupState {
-  const binCount = Math.max(1, 1 << Math.min(bits, 16));
+  const binCount = Math.max(1, 1 << Math.min(bits, MAX_BITS));
   const bins = new Uint32Array(binCount);
   const keys = createKeys(binCount);
   return { bins, keys, count: 0 };
