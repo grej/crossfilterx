@@ -78,26 +78,78 @@ export type CsrIndex = {
   binOffsets: Uint32Array;
 };
 
+/**
+ * Builds a CSR (Compressed Sparse Row) index for efficient range queries.
+ *
+ * Uses a classic **two-pass counting sort** algorithm:
+ *
+ * ## Pass 1: Count rows per bin
+ * Histogram each row's bin value to know how much space each bin needs.
+ *
+ * Example: column [2, 1, 2, 0, 1] produces counts [1, 2, 2]
+ * - Bin 0: 1 row
+ * - Bin 1: 2 rows
+ * - Bin 2: 2 rows
+ *
+ * ## Pass 2: Compute offsets (prefix sum)
+ * Convert counts into starting positions for each bin in the output array.
+ *
+ * Example: counts [1, 2, 2] → offsets [0, 1, 3, 5]
+ * - Bin 0 starts at index 0
+ * - Bin 1 starts at index 1 (0 + 1)
+ * - Bin 2 starts at index 3 (1 + 2)
+ * - End marker at index 5 (3 + 2)
+ *
+ * ## Pass 3: Place row IDs
+ * Iterate through rows again, placing each row ID in the correct bin's section
+ * using cursors that advance as we fill each bin.
+ *
+ * Example: Process rows [2, 1, 2, 0, 1]
+ * - Row 0 (bin 2): place at cursor[2]=3 → [_, _, _, 0, _], cursor[2]++
+ * - Row 1 (bin 1): place at cursor[1]=1 → [_, 1, _, 0, _], cursor[1]++
+ * - Row 2 (bin 2): place at cursor[2]=4 → [_, 1, _, 0, 2], cursor[2]++
+ * - Row 3 (bin 0): place at cursor[0]=0 → [3, 1, _, 0, 2], cursor[0]++
+ * - Row 4 (bin 1): place at cursor[1]=2 → [3, 1, 4, 0, 2], cursor[1]++
+ *
+ * Result: rowIdsByBin = [3, 1, 4, 0, 2], binOffsets = [0, 1, 3, 5]
+ *
+ * ## Why Two-Pass?
+ *
+ * - **Faster than sorting**: O(n + b) vs O(n log n)
+ * - **Cache-friendly**: Sequential writes, predictable access patterns
+ * - **Stable**: Preserves row order within each bin (though not required here)
+ * - **Memory-efficient**: Single allocation, no temporary storage
+ *
+ * @param column - Quantized column values (each value is a bin index)
+ * @param binCount - Total number of bins in the histogram
+ * @returns CSR index with rowIdsByBin and binOffsets arrays
+ */
 export function buildCsr(column: Uint16Array, binCount: number): CsrIndex {
   const rowCount = column.length;
-  const counts = new Uint32Array(binCount);
 
+  // **Pass 1: Count rows per bin**
+  // Build histogram: counts[bin] = number of rows with that bin value
+  const counts = new Uint32Array(binCount);
   for (let i = 0; i < rowCount; i++) {
     counts[column[i]]++;
   }
 
+  // **Pass 2: Compute offsets (prefix sum)**
+  // Convert counts to starting positions for each bin in the output
   const offsets = new Uint32Array(binCount + 1);
   for (let bin = 0, acc = 0; bin < binCount; bin++) {
     offsets[bin] = acc;
     acc += counts[bin];
   }
-  offsets[binCount] = rowCount;
+  offsets[binCount] = rowCount;  // Sentinel: marks end of last bin
 
+  // **Pass 3: Place row IDs**
+  // Use cursor (copy of offsets) to track current write position for each bin
   const cursor = offsets.slice();
   const rowIds = new Uint32Array(rowCount);
   for (let row = 0; row < rowCount; row++) {
     const bin = column[row];
-    rowIds[cursor[bin]++] = row;
+    rowIds[cursor[bin]++] = row;  // Place row ID, then advance cursor
   }
 
   return { rowIdsByBin: rowIds, binOffsets: offsets };

@@ -739,10 +739,52 @@ function exhaustive(value: never): never {
   throw new Error(`Unhandled message type: ${JSON.stringify(value)}`);
 }
 
+/**
+ * Computes the set difference between two ranges for incremental filter updates.
+ *
+ * When a filter range changes from [2, 7] to [4, 9], instead of reprocessing
+ * everything, we compute:
+ * - **added**: Bins that became active (were outside old range, now inside new)
+ * - **removed**: Bins that became inactive (were inside old range, now outside new)
+ *
+ * ## Visual Example
+ *
+ * ```
+ * previous: [2, 7]        ████████████
+ * next:     [4, 9]              ████████████
+ *                         ────────────────────
+ * Bins:     0 1 2 3 4 5 6 7 8 9 10
+ *
+ * removed:  [2, 3]        ████
+ * added:    [8, 9]                      ████
+ * overlap:  [4, 7]              ████████
+ * ```
+ *
+ * ## Algorithm
+ *
+ * 1. **Check for no-op**: If ranges identical, return null
+ * 2. **Left expansion**: If new range extends left, add [newMin, oldMin-1]
+ * 3. **Right expansion**: If new range extends right, add [oldMax+1, newMax]
+ * 4. **Left contraction**: If new range shrank left, remove [oldMin, newMin-1]
+ * 5. **Right contraction**: If new range shrank right, remove [newMax+1, oldMax]
+ * 6. **Normalize**: Filter out invalid ranges where min > max
+ *
+ * ## Edge Cases
+ *
+ * - **Disjoint ranges**: Both added and removed will be non-empty
+ * - **Subset**: Only removed segments
+ * - **Superset**: Only added segments
+ * - **Partial overlap**: Both added and removed segments
+ *
+ * @param previous - Old filter range
+ * @param next - New filter range
+ * @returns Null if ranges identical, else { added, removed } range segments
+ */
 function diffRanges(
   previous: { rangeMin: number; rangeMax: number },
   next: { rangeMin: number; rangeMax: number }
 ): { added: Array<[number, number]>; removed: Array<[number, number]> } | null {
+  // Fast path: no change
   if (previous.rangeMin === next.rangeMin && previous.rangeMax === next.rangeMax) {
     return null;
   }
@@ -750,20 +792,25 @@ function diffRanges(
   const added: Array<[number, number]> = [];
   const removed: Array<[number, number]> = [];
 
+  // Check if new range expanded to the left
   if (next.rangeMin < previous.rangeMin) {
     added.push([next.rangeMin, Math.min(previous.rangeMin - 1, next.rangeMax)]);
   }
+  // Check if new range expanded to the right
   if (next.rangeMax > previous.rangeMax) {
     added.push([Math.max(previous.rangeMax + 1, next.rangeMin), next.rangeMax]);
   }
 
+  // Check if old range extended further left (now removed)
   if (previous.rangeMin < next.rangeMin) {
     removed.push([previous.rangeMin, Math.min(next.rangeMin - 1, previous.rangeMax)]);
   }
+  // Check if old range extended further right (now removed)
   if (previous.rangeMax > next.rangeMax) {
     removed.push([Math.max(next.rangeMax + 1, previous.rangeMin), previous.rangeMax]);
   }
 
+  // Normalize: remove invalid ranges where min > max
   return { added: normalizeRanges(added), removed: normalizeRanges(removed) };
 }
 
@@ -901,12 +948,57 @@ function evaluateRow(
   return { passes, satisfied };
 }
 
+/**
+ * Sets or clears a bit in the active row bitmask using bit manipulation.
+ *
+ * The mask compacts 8 row states into each byte, reducing memory by 8x
+ * compared to a boolean array. Each byte stores 8 row flags as individual bits.
+ *
+ * ## Bit Packing Layout
+ *
+ * ```
+ * mask[0]: [row7 row6 row5 row4 row3 row2 row1 row0]  // rows 0-7
+ * mask[1]: [row15 row14 ... row9 row8]                // rows 8-15
+ * mask[2]: [row23 row22 ... row17 row16]              // rows 16-23
+ * ...
+ * ```
+ *
+ * ## Algorithm
+ *
+ * 1. **Find byte index**: `row >> 3` divides by 8 (which byte?)
+ * 2. **Find bit position**: `row & 7` computes row % 8 (which bit in that byte?)
+ * 3. **Set bit**: `mask[index] |= (1 << bit)` - OR with bit mask
+ * 4. **Clear bit**: `mask[index] &= ~(1 << bit)` - AND with inverted bit mask
+ *
+ * ## Example
+ *
+ * Mark row 13 as active:
+ * ```
+ * row = 13
+ * index = 13 >> 3 = 1     // byte 1 (rows 8-15)
+ * bit = 13 & 7 = 5        // bit 5 within that byte
+ * mask[1] |= (1 << 5)     // Set bit 5: 0b00100000
+ * ```
+ *
+ * Before: mask[1] = 0b00000011 (rows 8, 9 active)
+ * After:  mask[1] = 0b00100011 (rows 8, 9, 13 active)
+ *
+ * ## Performance
+ *
+ * - **Memory**: 1 bit per row = n/8 bytes (vs n bytes for boolean[])
+ * - **Time**: O(1) bit manipulation operations
+ * - **Cache-friendly**: Compact representation improves cache hit rate
+ *
+ * @param mask - Bit-packed active row flags (1 bit per row)
+ * @param row - Row index to set or clear
+ * @param isActive - true to set bit, false to clear bit
+ */
 function setMask(mask: Uint8Array, row: number, isActive: boolean) {
-  const index = row >> 3;
-  const bit = row & 7;
+  const index = row >> 3;     // Divide by 8 to find byte index
+  const bit = row & 7;        // Modulo 8 to find bit position (0-7)
   if (isActive) {
-    mask[index] |= 1 << bit;
+    mask[index] |= 1 << bit;  // Set bit: OR with bit mask
   } else {
-    mask[index] &= ~(1 << bit);
+    mask[index] &= ~(1 << bit);  // Clear bit: AND with inverted mask
   }
 }

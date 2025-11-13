@@ -140,10 +140,22 @@ export class RowActivator {
       histograms[dim].back[bin] += delta;
 
       // Update coarse histogram if present
+      // Coarse histograms aggregate multiple fine bins into single coarse bins
+      // for memory-efficient overview visualizations (e.g., sparklines, previews)
       const coarse = coarseHistograms[dim];
       if (coarse && coarse.front.length > 0) {
+        // **Aggregation factor**: How many fine bins map to each coarse bin
+        // Example: 4096 fine bins → 64 coarse bins = factor of 64
+        //   - Fine bins 0-63 → coarse bin 0
+        //   - Fine bins 64-127 → coarse bin 1
+        //   - etc.
         const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
+
+        // Map fine bin to coarse bin using integer division
+        // Example: bin 150 with factor 64 → coarseIdx = floor(150/64) = 2
         const coarseIdx = Math.floor(bin / factor);
+
+        // Apply same delta to coarse bin (aggregates all fine bins in range)
         coarse.front[coarseIdx] += delta;
         coarse.back[coarseIdx] += delta;
       }
