@@ -3,6 +3,7 @@ import { quantize, type QuantizeScale } from './memory/quantize';
 import { createProtocol, type DimSpec, type GroupSnapshot, type MsgFromWorker, type MsgToWorker } from './protocol';
 import type { ColumnarPayload } from './worker/ingest-executor';
 import type { ClearPlannerSnapshot } from './worker/clear-planner';
+import { createLogger } from './utils/logger';
 
 export type DimensionSpec = DimSpec;
 
@@ -30,6 +31,7 @@ export type IngestSource =
   | { kind: 'columnar'; data: ColumnarData };
 
 export class WorkerController {
+  private readonly logger = createLogger('Controller');
   private readonly worker: WorkerBridge;
   private readonly plannerSnapshotFn: () => ClearPlannerSnapshot;
   private readonly dimsByName = new Map<string, number>();
@@ -84,13 +86,13 @@ export class WorkerController {
   }
 
   filterRange(dimId: number, range: [number, number]) {
-    console.log(`[Controller] filterRange CALLED: dimId=${dimId}, range=[${range}], readyResolved=${this.readyResolved}`);
+    this.logger.log(`filterRange CALLED: dimId=${dimId}, range=[${range}], readyResolved=${this.readyResolved}`);
     const [lo, hi] = range;
     this.filterState.set(dimId, range);
 
     // If ready, call trackFrame synchronously (before any async)
     if (this.readyResolved) {
-      console.log(`[Controller] filterRange CALLING trackFrame SYNCHRONOUSLY`);
+      this.logger.log(`filterRange CALLING trackFrame SYNCHRONOUSLY`);
       return this.trackFrame({
         t: 'FILTER_SET',
         dimId,
@@ -135,14 +137,14 @@ export class WorkerController {
   }
 
   whenIdle() {
-    console.log(`[Controller] whenIdle CALLED: pendingFrames=${this.pendingFrames}`);
+    this.logger.log(`whenIdle CALLED: pendingFrames=${this.pendingFrames}`);
     if (this.pendingFrames === 0) {
-      console.log(`[Controller] whenIdle RESOLVING IMMEDIATELY`);
+      this.logger.log(`whenIdle RESOLVING IMMEDIATELY`);
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
       this.idleResolvers.push(resolve);
-      console.log(`[Controller] whenIdle WAITING (${this.idleResolvers.length} resolvers queued)`);
+      this.logger.log(`whenIdle WAITING (${this.idleResolvers.length} resolvers queued)`);
     });
   }
 
@@ -272,7 +274,7 @@ export class WorkerController {
     if (this.disposed) {
       return Promise.resolve();
     }
-    console.log(`[Controller] trackFrame INCREMENTING pendingFrames from ${this.pendingFrames} to ${this.pendingFrames + 1}`);
+    this.logger.log(`trackFrame INCREMENTING pendingFrames from ${this.pendingFrames} to ${this.pendingFrames + 1}`);
     this.pendingFrames++;
     const completion = new Promise<void>((resolve) => {
       this.frameResolvers.push(resolve);
@@ -348,7 +350,7 @@ export class WorkerController {
       const sum = Array.from(arr).reduce((a, b) => a + b, 0);
       return `[dim${g.id}:${sum}]`;
     }).join(' ');
-    console.log(`[Controller] applyFrame sums=${debugSums}`);
+    this.logger.log(`applyFrame sums=${debugSums}`);
 
     for (const snapshot of groups) {
       const state = this.groupState.get(snapshot.id);
@@ -359,7 +361,7 @@ export class WorkerController {
       const stateBinsSum = Array.from(state.bins).reduce((a, b) => a + b, 0);
       const incomingSum = Array.from(incoming).reduce((a, b) => a + b, 0);
       const bufferInfo = `state buffer ${state.bins.buffer.byteLength}@${state.bins.byteOffset}, incoming buffer ${incoming.buffer.byteLength}@${incoming.byteOffset}`;
-      console.log(`[Controller] dim${snapshot.id}: state.bins sum=${stateBinsSum}, incoming sum=${incomingSum}, same buffer? ${state.bins.buffer === incoming.buffer}, ${bufferInfo}`);
+      this.logger.log(`dim${snapshot.id}: state.bins sum=${stateBinsSum}, incoming sum=${incomingSum}, same buffer? ${state.bins.buffer === incoming.buffer}, ${bufferInfo}`);
 
       // ALWAYS update the bins reference to ensure we have the latest data
       // Even if it's the same SharedArrayBuffer, we want to ensure the view is correct
@@ -401,7 +403,7 @@ export class WorkerController {
   }
 
   private flushIdle() {
-    console.log(`[Controller] flushIdle: resolving ${this.idleResolvers.length} idle resolvers`);
+    this.logger.log(`flushIdle: resolving ${this.idleResolvers.length} idle resolvers`);
     while (this.idleResolvers.length) {
       this.idleResolvers.shift()?.();
     }

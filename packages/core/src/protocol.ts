@@ -96,6 +96,7 @@ import {
 } from './worker/histogram-updater';
 import { computeTopK } from './worker/top-k';
 import { ingestDataset, binsForSpec, type ColumnarPayload } from './worker/ingest-executor';
+import { createLogger } from './utils/logger';
 
 const BUFFER_THRESHOLD_ROWS = 32_768;
 const BUFFER_THRESHOLD_WORK = 1_048_576; // rows * dims
@@ -142,6 +143,7 @@ type ProfileCollector = {
 };
 
 export function createProtocol(post: (message: MsgFromWorker) => void) {
+  const logger = createLogger('Worker');
   const profiling = Boolean((globalThis as { __CFX_PROFILE_CLEAR?: boolean }).__CFX_PROFILE_CLEAR);
   const state: EngineState = {
     rowCount: 0,
@@ -175,9 +177,9 @@ export function createProtocol(post: (message: MsgFromWorker) => void) {
           buildIndex(state, message.dimId, post);
           break;
         case 'FILTER_SET':
-          console.log(`[Worker] FILTER_SET received: dimId=${message.dimId}, range=[${message.lo}, ${message.hi}]`);
+          logger.log(`FILTER_SET received: dimId=${message.dimId}, range=[${message.lo}, ${message.hi}]`);
           applyFilter(state, message.dimId, { lo: message.lo, hi: message.hi });
-          console.log(`[Worker] After applyFilter, activeCount=${state.activeCount}`);
+          logger.log(`After applyFilter, activeCount=${state.activeCount}`);
           handleFrame(message.seq, state, post);
           break;
       case 'FILTER_CLEAR':
@@ -320,6 +322,7 @@ function isColumnarPayload(value: unknown): value is ColumnarPayload {
 }
 
 function handleFrame(seq: number, state: EngineState, post: (message: MsgFromWorker) => void) {
+  const logger = createLogger('Worker');
   const profileSnapshot = state.profile?.lastClear ? { clear: state.profile.lastClear } : null;
 
   // DEBUG: Log histogram values before sending
@@ -327,7 +330,7 @@ function handleFrame(seq: number, state: EngineState, post: (message: MsgFromWor
     const sum = Array.from(h.front).reduce((a, b) => a + b, 0);
     return `[dim${id}:${sum}]`;
   }).join(' ');
-  console.log(`[Worker] handleFrame seq=${seq}, sums=${debugSums}, activeCount=${state.activeCount}`);
+  logger.log(`handleFrame seq=${seq}, sums=${debugSums}, activeCount=${state.activeCount}`);
 
   post({
     t: 'FRAME',
@@ -522,8 +525,8 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
   const useDelta = plan === 'delta';
 
   if (DEBUG_MODE && !useDelta) {
-    console.log(
-      `[CrossfilterX Debug] Full recompute triggered. ` +
+    logger.log(
+      `Full recompute triggered. ` +
         `Inside: ${insideCount}, Outside: ${outsideCount}, ` +
         `Reason: ${plan === 'recompute' ? 'Planner decision' : 'Fallback'}`
     );
