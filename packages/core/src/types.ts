@@ -82,26 +82,27 @@ export interface CFHandle {
   /**
    * Creates a dimension for filtering and grouping.
    *
+   * **IMPORTANT**: Only string column names are supported. Function-based dimensions
+   * are NOT supported because they block the main thread.
+   *
    * @param name - Name of the column in your dataset
    * @returns DimensionHandle for filtering and grouping
    *
-   * @example
+   * @example Supported Usage
    * ```typescript
    * const priceDim = cf.dimension('price');
    * priceDim.filter([100, 200]);
    * ```
    *
-   * @deprecated Function-based dimensions (e.g., `cf.dimension(d => d.computed)`)
-   * are not supported because they block the main thread. Pre-compute columns instead.
+   * @example NOT Supported - Will throw error
+   * ```typescript
+   * // ❌ This will throw an error
+   * cf.dimension(d => d.computed)
+   * ```
+   *
+   * @throws Error if a function is passed - pre-compute columns in your data instead
    */
-  dimension(name: string): DimensionHandle;
-
-  /**
-   * @deprecated Function-based dimensions block the main thread and are not supported.
-   * Use `dimension(columnName: string)` instead and pre-compute values in your dataset.
-   * @throws Error when called with a function
-   */
-  dimension(accessor: (row: unknown) => number | string): never;
+  dimension(name: string | ((row: unknown) => number | string)): DimensionHandle;
 
   group(name: string | DimensionHandle, options?: GroupOptions): GroupHandle;
   whenIdle(): Promise<void>;

@@ -130,6 +130,28 @@ const UI_BLOCKING_THRESHOLD = 250_000;
 const MAX_CATEGORIES = 0xffff;
 
 export class WorkerController {
+  /**
+   * Registry for automatic cleanup of workers when instances are garbage collected.
+   * Prevents memory leaks by ensuring workers are terminated even if dispose() isn't called.
+   */
+  private static readonly cleanup = new FinalizationRegistry<WorkerBridge>((worker) => {
+    worker.terminate();
+  });
+
+  /**
+   * Tracks the number of active CrossfilterX instances for memory leak warnings.
+   * Incremented in constructor, decremented in dispose().
+   */
+  private static instanceCount = 0;
+
+  /**
+   * Maximum number of concurrent instances before warning the user.
+   * Can be overridden via CFX_MAX_INSTANCES environment variable.
+   */
+  private static readonly MAX_INSTANCES = typeof process !== 'undefined' && process.env?.CFX_MAX_INSTANCES
+    ? parseInt(process.env.CFX_MAX_INSTANCES, 10)
+    : 5;
+
   private readonly logger = createLogger('Controller');
   private readonly worker: WorkerBridge;
   private readonly plannerSnapshotFn: () => ClearPlannerSnapshot;
@@ -164,6 +186,21 @@ export class WorkerController {
     this.worker.onmessage = (event) => {
       this.handleMessage(event.data as MsgFromWorker);
     };
+
+    // Track instance for memory leak detection
+    WorkerController.instanceCount++;
+
+    // Register for automatic cleanup when garbage collected
+    WorkerController.cleanup.register(this, this.worker, this);
+
+    // Warn if too many instances are active
+    if (WorkerController.instanceCount >= WorkerController.MAX_INSTANCES) {
+      console.warn(
+        `[CrossfilterX] ${WorkerController.instanceCount} active instances detected. ` +
+        `Call dispose() on unused instances to prevent memory leaks. ` +
+        `See: https://github.com/grej/crossfilterx#memory-management`
+      );
+    }
 
     this.readyPromise = new Promise((resolve) => {
       this.resolveReady = resolve;
@@ -249,7 +286,26 @@ export class WorkerController {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+
+    // Decrement instance count
+    WorkerController.instanceCount--;
+
+    // Unregister from automatic cleanup (we're cleaning up manually)
+    WorkerController.cleanup.unregister(this);
+
+    // Terminate worker
     this.worker.terminate();
+
+    // CRITICAL: Clear all references to SharedArrayBuffers to allow GC
+    // Without this, TypedArray views keep SharedArrayBuffers alive
+    this.groupState.clear();
+    this.dimsByName.clear();
+    this.indexInfo.clear();
+    this.indexResolvers.clear();
+    this.filterState.clear();
+    this.topKResolvers.clear();
+    this.pendingDimensionResolvers.clear();
+
     if (!this.readyResolved) {
       this.resolveReady();
       this.readyResolved = true;

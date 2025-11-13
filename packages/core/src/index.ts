@@ -624,7 +624,7 @@ export const crossfilterX = (data: unknown, options: CFOptions = {}): CFHandle =
   const controller = new WorkerController(schema, source, options);
 
   return {
-    dimension(nameOrAccessor) {
+    dimension(nameOrAccessor: string | ((row: unknown) => number | string)) {
       if (typeof nameOrAccessor === 'string') {
         const id = controller.dimensionId(nameOrAccessor);
         return new DimensionHandleImpl(controller, id);

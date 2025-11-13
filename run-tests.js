@@ -14,7 +14,9 @@ const testFiles = [
   'packages/core/test/ingest-descriptor.test.ts',
   'packages/core/test/coarsening.test.ts',
   'packages/core/test/reductions.test.ts',
-  'packages/core/test/top-k.test.ts'
+  'packages/core/test/top-k.test.ts',
+  'packages/core/test/memory-management.test.ts',
+  'packages/core/test/function-dimension-removal.test.ts'
 ];
 
 let index = 0;
