@@ -42,7 +42,7 @@ export type MsgToWorker =
     };
 
 export type MsgFromWorker =
-  | { t: 'READY'; n: number; dims: DimMeta[] }
+  | { t: 'READY'; n: number; groups: GroupSnapshot[] }
   | { t: 'INDEX_BUILT'; dimId: number; ms: number; bytes: number }
   | { t: 'FRAME'; seq: number; activeCount: number; groups: GroupSnapshot[]; profile?: ProfileSnapshot | null }
   | { t: 'PROGRESS'; phase: string; done: number; total: number }
@@ -103,7 +103,7 @@ const BUFFER_THRESHOLD_WORK = 1_048_576; // rows * dims
 const HISTOGRAM_MODE_FLAG = '__CFX_HIST_MODE' as const;
 const DEFAULT_HISTOGRAM_MODE: HistogramMode = 'auto';
 
-const DEBUG_MODE = Boolean((globalThis as any).__CFX_DEBUG || process?.env?.CFX_DEBUG);
+const DEBUG_MODE = Boolean((globalThis as any).__CFX_DEBUG || (typeof process !== 'undefined' && process?.env?.CFX_DEBUG));
 
 type EngineState = {
   rowCount: number;
@@ -175,7 +175,9 @@ export function createProtocol(post: (message: MsgFromWorker) => void) {
           buildIndex(state, message.dimId, post);
           break;
         case 'FILTER_SET':
+          console.log(`[Worker] FILTER_SET received: dimId=${message.dimId}, range=[${message.lo}, ${message.hi}]`);
           applyFilter(state, message.dimId, { lo: message.lo, hi: message.hi });
+          console.log(`[Worker] After applyFilter, activeCount=${state.activeCount}`);
           handleFrame(message.seq, state, post);
           break;
       case 'FILTER_CLEAR':
@@ -198,11 +200,26 @@ export function createProtocol(post: (message: MsgFromWorker) => void) {
         case 'GROUP_TOP_K': {
           const histogram = state.histograms[message.dimId].front;
           const descriptor = state.descriptors[message.dimId];
+          const dim = state.dims[message.dimId];
           const labels = descriptor.labels || (descriptor.dictionary ? Array.from(descriptor.dictionary.keys()) : undefined);
 
           const results = computeTopK(histogram, message.k, labels, message.isBottom);
 
-          post({ t: 'TOP_K_RESULT', seq: message.seq, results });
+          if (descriptor.scale) {
+            const scale = descriptor.scale;
+            const bits = dim.bits;
+            const maxBin = (1 << bits) - 1;
+            const mappedResults = results.map((result) => {
+              const value = scale.min + ((result.key as number) / maxBin) * (scale.max - scale.min);
+              return {
+                key: value,
+                value: result.value
+              };
+            });
+            post({ t: 'TOP_K_RESULT', seq: message.seq, results: mappedResults });
+          } else {
+            post({ t: 'TOP_K_RESULT', seq: message.seq, results });
+          }
           break;
         }
         default:
@@ -281,10 +298,19 @@ function handleIngest(
   post({
     t: 'READY',
     n: state.rowCount,
-    dims: msg.schema.map((dim, index) => ({
-      name: dim.name,
-      bins: binsPerDimension[index]
-    }))
+    groups: state.histograms.map((histogram, id) => {
+      const coarse = state.coarseHistograms[id];
+      return {
+        id,
+        bins: histogram.front.buffer,
+        byteOffset: histogram.front.byteOffset,
+        binCount: histogram.front.length,
+        count: state.activeCount,
+        coarseBins: coarse?.front.buffer,
+        coarseByteOffset: coarse?.front.byteOffset,
+        coarseBinCount: coarse?.front.length
+      };
+    })
   });
   handleFrame(0, state, post);
 }
@@ -295,6 +321,14 @@ function isColumnarPayload(value: unknown): value is ColumnarPayload {
 
 function handleFrame(seq: number, state: EngineState, post: (message: MsgFromWorker) => void) {
   const profileSnapshot = state.profile?.lastClear ? { clear: state.profile.lastClear } : null;
+
+  // DEBUG: Log histogram values before sending
+  const debugSums = state.histograms.map((h, id) => {
+    const sum = Array.from(h.front).reduce((a, b) => a + b, 0);
+    return `[dim${id}:${sum}]`;
+  }).join(' ');
+  console.log(`[Worker] handleFrame seq=${seq}, sums=${debugSums}, activeCount=${state.activeCount}`);
+
   post({
     t: 'FRAME',
     seq,
@@ -685,63 +719,9 @@ function resolveHistogramMode(): HistogramMode {
   return DEFAULT_HISTOGRAM_MODE;
 }
 
-function shouldBufferHistogramUpdate(mode: HistogramMode, toggledRows: number, histogramCount: number) {
-  if (mode === 'buffered') return true;
-  if (mode === 'direct') return false;
-  if (mode === 'simd') return false;
-  if (mode === 'auto' && toggledRows < BUFFER_THRESHOLD_ROWS) {
-    return false;
-  }
-  const boundedHistograms = Math.max(1, histogramCount);
-  const workEstimate = toggledRows * boundedHistograms;
-  return toggledRows >= BUFFER_THRESHOLD_ROWS || workEstimate >= BUFFER_THRESHOLD_WORK;
-}
 
-type HistogramBuffer = {
-  inc(bin: number): void;
-  dec(bin: number): void;
-  flush(histograms: HistogramView[], dim: number): void;
-};
 
-/**
- * Creates per-dimension accumulators backed by `Int32Array` buffers. Each
- * buffer collects bin deltas locally so that `flushHistogramBuffers` can apply
- * them in a single pass, avoiding repeated writes to the front/back histogram
- * views during large clears.
- */
-function createHistogramBuffers(count: number, bins: number) {
-  if (!count) return null;
-  const buffers: HistogramBuffer[] = new Array(count);
-  for (let i = 0; i < count; i++) {
-    const local = new Int32Array(bins);
-    buffers[i] = {
-      inc(bin) {
-        local[bin]++;
-      },
-      dec(bin) {
-        local[bin]--;
-      },
-      flush(histograms, dim) {
-        const target = histograms[dim];
-        for (let bin = 0; bin < bins; bin++) {
-          const delta = local[bin];
-          if (!delta) continue;
-          target.front[bin] += delta;
-          target.back[bin] += delta;
-          local[bin] = 0;
-        }
-      }
-    };
-  }
-  return buffers;
-}
 
-function flushHistogramBuffers(buffers: HistogramBuffer[] | null, histograms: HistogramView[]) {
-  if (!buffers) return;
-  for (let dim = 0; dim < buffers.length; dim++) {
-    buffers[dim].flush(histograms, dim);
-  }
-}
 
 function flushSimd(state: EngineState) {
   if (state.histogramMode !== 'simd') return;

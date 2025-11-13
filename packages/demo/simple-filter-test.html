@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Simple Filter Test</title>
+</head>
+<body>
+  <h1>Simple Filter Test</h1>
+  <div id="output"></div>
+
+  <script type="module">
+    import { crossfilterX } from '@crossfilterx/core';
+
+    const output = document.getElementById('output');
+    function log(msg) {
+      const div = document.createElement('div');
+      div.textContent = msg;
+      output.appendChild(div);
+      console.log(msg);
+    }
+
+    async function test() {
+      log('Creating data...');
+      const data = [
+        { hour: 0 },
+        { hour: 5 },
+        { hour: 10 },
+        { hour: 15 },
+        { hour: 20 }
+      ];
+
+      log('Creating crossfilter...');
+      const cf = crossfilterX(data, { bins: 1024 });
+      const dim = cf.dimension('hour');
+      const group = cf.group('hour');
+
+      await cf.whenIdle();
+
+      log('Initial bins sum: ' + Array.from(group.bins()).reduce((a, b) => a + b, 0));
+
+      // Filter to hours 10-20 (should keep 3 records: 10, 15, 20)
+      log('Applying filter [10, 20]...');
+
+      // Calculate bins for values 10 and 20
+      const scale = { min: 0, max: 23 };
+      const bits = 10;
+      const range = (1 << bits) - 1; // 1023
+
+      const minBin = Math.round((10 - scale.min) / (scale.max - scale.min) * range);
+      const maxBin = Math.round((20 - scale.min) / (scale.max - scale.min) * range);
+
+      log(`Filter bins: [${minBin}, ${maxBin}]`);
+
+      dim.filter([minBin, maxBin]);
+      await cf.whenIdle();
+
+      const filteredBins = group.bins();
+      const filteredSum = Array.from(filteredBins).reduce((a, b) => a + b, 0);
+      log('Filtered bins sum: ' + filteredSum);
+      log('Expected: 3');
+
+      if (filteredSum === 3) {
+        log('✅ PASS');
+      } else {
+        log('❌ FAIL');
+      }
+    }
+
+    test().catch(err => {
+      log('ERROR: ' + err.message);
+      console.error(err);
+    });
+  </script>
+</body>
+</html>

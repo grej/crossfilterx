@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head><title>Debug Bins</title></head>
+<body>
+  <h1>Debug Bins</h1>
+  <pre id="output"></pre>
+  <script type="module">
+    import { crossfilterX } from '@crossfilterx/core';
+
+    const output = document.getElementById('output');
+    function log(msg) {
+      output.textContent += msg + '\n';
+      console.log(msg);
+    }
+
+    async function test() {
+      // Create 5 simple records
+      const data = [
+        { value: 0 },
+        { value: 1 },
+        { value: 2 },
+        { value: 3 },
+        { value: 4 }
+      ];
+
+      log('Creating crossfilter with 5 records (values 0-4)...');
+      const cf = crossfilterX(data, { bins: 16 });
+      const dim = cf.dimension('value');
+      const group = cf.group('value');
+
+      await cf.whenIdle();
+
+      log('\\nInitial state:');
+      const bins1 = group.bins();
+      log(`  Bins length: ${bins1.length}`);
+      log(`  Total count: ${Array.from(bins1).reduce((a,b) => a+b, 0)}`);
+      log(`  Non-zero bins: ${Array.from(bins1).map((v, i) => v > 0 ? `[${i}]=${v}` : '').filter(s => s).join(', ')}`);
+      log(`  Buffer type: ${bins1.buffer.constructor.name}`);
+      log(`  Buffer byteLength: ${bins1.buffer.byteLength}`);
+
+      log('\\nApplying filter to bins [5, 10] (values ~1.5 to ~2.5)...');
+      dim.filter([5, 10]);
+     await cf.whenIdle();
+
+      log('\\nAfter filter:');
+      const bins2 = group.bins();
+      log(`  Bins length: ${bins2.length}`);
+      log(`  Total count: ${Array.from(bins2).reduce((a,b) => a+b, 0)}`);
+      log(`  Non-zero bins: ${Array.from(bins2).map((v, i) => v > 0 ? `[${i}]=${v}` : '').filter(s => s).join(', ')}`);
+      log(`  Same buffer? ${bins1.buffer === bins2.buffer}`);
+      log(`  Same array? ${bins1 === bins2}`);
+
+      log('\\nClearing filter...');
+      dim.clear();
+      await cf.whenIdle();
+
+      log('\\nAfter clear:');
+      const bins3 = group.bins();
+      log(`  Total count: ${Array.from(bins3).reduce((a,b) => a+b, 0)}`);
+      log(`  Non-zero bins: ${Array.from(bins3).map((v, i) => v > 0 ? `[${i}]=${v}` : '').filter(s => s).join(', ')}`);
+    }
+
+    test().catch(err => {
+      log('ERROR: ' + err.message);
+      console.error(err);
+    });
+  </script>
+</body>
+</html>

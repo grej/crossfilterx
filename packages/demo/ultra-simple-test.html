@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head><title>Ultra Simple Test</title></head>
+<body>
+  <h1>Ultra Simple Test</h1>
+  <pre id="output"></pre>
+  <script type="module">
+    import { crossfilterX } from '@crossfilterx/core';
+
+    const output = document.getElementById('output');
+    function log(msg) {
+      output.textContent += msg + '\n';
+      console.log(msg);
+    }
+
+    async function test() {
+      try {
+        const data = [{ x: 10 }, { x: 20 }, { x: 30 }];
+        log('Data: 10, 20, 30');
+
+        const cf = crossfilterX(data, { bins: 100 });
+        const dim = cf.dimension('x');
+        const group = cf.group('x');
+
+        await cf.whenIdle();
+
+        const bins1 = group.bins();
+        const sum1 = Array.from(bins1).reduce((a, b) => a + b, 0);
+        log(`After init: sum=${sum1} (expect 3)`);
+
+        // Filter to keep only x >= 20 (bins ~66-100)
+        dim.filter([66, 99]);
+        await cf.whenIdle();
+
+        const bins2 = group.bins();
+        const sum2 = Array.from(bins2).reduce((a, b) => a + b, 0);
+        log(`After filter [66,99]: sum=${sum2} (expect 2, got ${sum2})`);
+
+        log(`\\nbins1 === bins2? ${bins1 === bins2}`);
+        log(`bins1.buffer === bins2.buffer? ${bins1.buffer === bins2.buffer}`);
+        log(`Buffer type: ${bins1.buffer.constructor.name}`);
+
+        if (sum2 === 2) {
+          log('\\n✅ SUCCESS');
+        } else {
+          log('\\n❌ FAIL');
+        }
+      } catch (error) {
+        log('ERROR: ' + error.message);
+        console.error(error);
+      }
+    }
+
+    test();
+  </script>
+</body>
+</html>

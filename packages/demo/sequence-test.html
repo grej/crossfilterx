@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head><title>Sequence Test</title></head>
+<body>
+  <h1>Sequence Test - Check Console</h1>
+  <pre id="output"></pre>
+  <script type="module">
+    import { crossfilterX } from '@crossfilterx/core';
+
+    const output = document.getElementById('output');
+    function log(msg) {
+      output.textContent += msg + '\n';
+      console.log(`[TEST] ${msg}`);
+    }
+
+    async function test() {
+      log('1. Creating crossfilter with 5 flights');
+      const flights = [
+        { hour: 0 }, { hour: 5 }, { hour: 10 }, { hour: 15 }, { hour: 20 }
+      ];
+
+      const cf = crossfilterX(flights, { bins: 1024 });
+      const dim = cf.dimension('hour');
+      const group = cf.group('hour');
+
+      log('2. Waiting for idle after creation...');
+      await cf.whenIdle();
+      log('3. Idle after creation');
+
+      const bins1 = group.bins();
+      const sum1 = Array.from(bins1).reduce((a, b) => a + b, 0);
+      log(`4. Initial bins sum: ${sum1} (expect 5)`);
+
+      log('5. Calling dim.filter([400, 800])...');
+      const filterResult = dim.filter([400, 800]);  // Call filter (returns immediately)
+      log(`5b. Filter returned: ${filterResult}, is same as dim? ${filterResult === dim}`);
+
+      log('6. Waiting for idle after filter (this should wait for filter to complete)...');
+      const idleStart = performance.now();
+      await cf.whenIdle();
+      const idleTime = performance.now() - idleStart;
+      log(`7. Idle after filter (took ${idleTime.toFixed(2)}ms)`);
+
+      const bins2 = group.bins();
+      const sum2 = Array.from(bins2).reduce((a, b) => a + b, 0);
+      log(`8. Filtered bins sum: ${sum2} (expect 2 for hours 10,15 - bins 426,640)`);
+
+      log(`9. Same bins object? ${bins1 === bins2}`);
+      log(`10. Same buffer? ${bins1.buffer === bins2.buffer}`);
+
+      if (sum2 === 2) {
+        log('\n✅ SUCCESS - filtering works!');
+      } else {
+        log(`\n❌ FAIL - expected 2, got ${sum2}`);
+      }
+    }
+
+    test().catch(err => {
+      log('ERROR: ' + err.message);
+      console.error(err);
+    });
+  </script>
+</body>
+</html>

@@ -83,35 +83,66 @@ export class WorkerController {
     });
   }
 
-  async filterRange(dimId: number, range: [number, number]) {
-    await this.readyPromise;
+  filterRange(dimId: number, range: [number, number]) {
+    console.log(`[Controller] filterRange CALLED: dimId=${dimId}, range=[${range}], readyResolved=${this.readyResolved}`);
     const [lo, hi] = range;
     this.filterState.set(dimId, range);
-    return this.trackFrame({
-      t: 'FILTER_SET',
-      dimId,
-      lo,
-      hi,
-      seq: this.nextSeq()
+
+    // If ready, call trackFrame synchronously (before any async)
+    if (this.readyResolved) {
+      console.log(`[Controller] filterRange CALLING trackFrame SYNCHRONOUSLY`);
+      return this.trackFrame({
+        t: 'FILTER_SET',
+        dimId,
+        lo,
+        hi,
+        seq: this.nextSeq()
+      });
+    }
+
+    // If not ready yet, wait then call trackFrame
+    return this.readyPromise.then(() => {
+      return this.trackFrame({
+        t: 'FILTER_SET',
+        dimId,
+        lo,
+        hi,
+        seq: this.nextSeq()
+      });
     });
   }
 
-  async clearFilter(dimId: number) {
-    await this.readyPromise;
+  clearFilter(dimId: number) {
     this.filterState.delete(dimId);
-    return this.trackFrame({
-      t: 'FILTER_CLEAR',
-      dimId,
-      seq: this.nextSeq()
+
+    // If ready, call trackFrame synchronously (before any async)
+    if (this.readyResolved) {
+      return this.trackFrame({
+        t: 'FILTER_CLEAR',
+        dimId,
+        seq: this.nextSeq()
+      });
+    }
+
+    // If not ready yet, wait then call trackFrame
+    return this.readyPromise.then(() => {
+      return this.trackFrame({
+        t: 'FILTER_CLEAR',
+        dimId,
+        seq: this.nextSeq()
+      });
     });
   }
 
   whenIdle() {
+    console.log(`[Controller] whenIdle CALLED: pendingFrames=${this.pendingFrames}`);
     if (this.pendingFrames === 0) {
+      console.log(`[Controller] whenIdle RESOLVING IMMEDIATELY`);
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
       this.idleResolvers.push(resolve);
+      console.log(`[Controller] whenIdle WAITING (${this.idleResolvers.length} resolvers queued)`);
     });
   }
 
@@ -241,6 +272,7 @@ export class WorkerController {
     if (this.disposed) {
       return Promise.resolve();
     }
+    console.log(`[Controller] trackFrame INCREMENTING pendingFrames from ${this.pendingFrames} to ${this.pendingFrames + 1}`);
     this.pendingFrames++;
     const completion = new Promise<void>((resolve) => {
       this.frameResolvers.push(resolve);
@@ -253,6 +285,9 @@ export class WorkerController {
     if (this.disposed) return;
     switch (message.t) {
       case 'READY':
+        for (const snapshot of message.groups) {
+          this.groupState.set(snapshot.id, snapshotToGroupState(snapshot));
+        }
         if (!this.readyResolved) {
           this.readyResolved = true;
           this.resolveReady();
@@ -307,16 +342,29 @@ export class WorkerController {
   }
 
   private applyFrame(groups: GroupSnapshot[]) {
+    // DEBUG: Log what we're receiving
+    const debugSums = groups.map(g => {
+      const arr = new Uint32Array(g.bins, g.byteOffset, g.binCount);
+      const sum = Array.from(arr).reduce((a, b) => a + b, 0);
+      return `[dim${g.id}:${sum}]`;
+    }).join(' ');
+    console.log(`[Controller] applyFrame sums=${debugSums}`);
+
     for (const snapshot of groups) {
       const state = this.groupState.get(snapshot.id);
       if (!state) continue;
       const incoming = new Uint32Array(snapshot.bins, snapshot.byteOffset, snapshot.binCount);
-      if (
-        state.bins.buffer !== incoming.buffer ||
-        state.bins.byteOffset !== incoming.byteOffset ||
-        state.bins.length !== incoming.length
-      ) {
-        state.bins = incoming;
+
+      // DEBUG: Check if state.bins shows the same values
+      const stateBinsSum = Array.from(state.bins).reduce((a, b) => a + b, 0);
+      const incomingSum = Array.from(incoming).reduce((a, b) => a + b, 0);
+      const bufferInfo = `state buffer ${state.bins.buffer.byteLength}@${state.bins.byteOffset}, incoming buffer ${incoming.buffer.byteLength}@${incoming.byteOffset}`;
+      console.log(`[Controller] dim${snapshot.id}: state.bins sum=${stateBinsSum}, incoming sum=${incomingSum}, same buffer? ${state.bins.buffer === incoming.buffer}, ${bufferInfo}`);
+
+      // ALWAYS update the bins reference to ensure we have the latest data
+      // Even if it's the same SharedArrayBuffer, we want to ensure the view is correct
+      state.bins = incoming;
+      if (state.bins.length !== state.keys.length) {
         state.keys = createKeys(state.bins.length);
       }
       state.count = snapshot.count;
@@ -353,6 +401,7 @@ export class WorkerController {
   }
 
   private flushIdle() {
+    console.log(`[Controller] flushIdle: resolving ${this.idleResolvers.length} idle resolvers`);
     while (this.idleResolvers.length) {
       this.idleResolvers.shift()?.();
     }
@@ -552,7 +601,20 @@ function createGroupState(bits: number): GroupState {
 function snapshotToGroupState(snapshot: GroupSnapshot): GroupState {
   const bins = new Uint32Array(snapshot.bins, snapshot.byteOffset, snapshot.binCount);
   const keys = createKeys(snapshot.binCount);
-  return { bins, keys, count: snapshot.count };
+  const state: GroupState = { bins, keys, count: snapshot.count };
+
+  if (snapshot.coarseBins && snapshot.coarseByteOffset !== undefined && snapshot.coarseBinCount !== undefined) {
+    state.coarse = {
+      bins: new Uint32Array(snapshot.coarseBins, snapshot.coarseByteOffset, snapshot.coarseBinCount),
+      keys: createKeys(snapshot.coarseBinCount)
+    };
+  }
+
+  if (snapshot.sum) {
+    state.sum = new Float64Array(snapshot.sum);
+  }
+
+  return state;
 }
 
 function createKeys(length: number): Uint16Array | Float32Array {
@@ -574,6 +636,7 @@ function createWorkerInstance(): { worker: WorkerBridge; plannerSnapshot: () => 
   let lastSnapshot = createEmptyPlannerSnapshot();
 
   if (typeof Worker === 'function' && typeof window !== 'undefined') {
+    // Always use worker.ts - Vite and browsers will handle the resolution
     const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
     let listener: ((event: MessageEvent<MsgFromWorker>) => void) | null = null;
     worker.onmessage = (event) => {

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head><title>Minimal Test</title></head>
+<body>
+  <h1>Minimal Test</h1>
+  <div id="output"></div>
+  <script type="module">
+    import { crossfilterX } from '@crossfilterx/core';
+
+    const output = document.getElementById('output');
+    function log(msg) {
+      const div = document.createElement('div');
+      div.textContent = msg;
+      output.appendChild(div);
+      console.log(msg);
+    }
+
+    async function test() {
+      try {
+        log('1. Creating data...');
+        const data = [{ x: 0 }, { x: 1 }, { x: 2 }, { x: 3 }, { x: 4 }];
+
+        log('2. Creating crossfilter...');
+        const cf = crossfilterX(data, { bins: 64 });
+
+        log('3. Creating dimension...');
+        const dim = cf.dimension('x');
+
+        log('4. Creating group...');
+        const group = cf.group('x');
+
+        log('5. Waiting for idle...');
+        await cf.whenIdle();
+
+        log('6. Getting initial count...');
+        const initialSum = Array.from(group.bins()).reduce((a, b) => a + b, 0);
+        log(`   Initial sum: ${initialSum}`);
+
+        log('7. Applying filter [1, 3]...');
+        log('   Calling dim.filter...');
+        const filterPromise = dim.filter([20, 40]);  // bins for values 1-3 approx
+        log(`   Filter returned, awaiting...`);
+        await filterPromise;
+        log('   Filter await complete');
+
+        log('8. Waiting for idle...');
+        await cf.whenIdle();
+        log('   Idle complete');
+
+        log('9. Getting filtered count...');
+        const filteredSum = Array.from(group.bins()).reduce((a, b) => a + b, 0);
+        log(`   Filtered sum: ${filteredSum}`);
+
+        if (filteredSum < initialSum) {
+          log('✅ SUCCESS - filter worked!');
+        } else {
+          log('❌ FAIL - filter did not reduce count');
+        }
+      } catch (error) {
+        log(`ERROR: ${error.message}`);
+        console.error(error);
+      }
+    }
+
+    test();
+  </script>
+</body>
+</html>

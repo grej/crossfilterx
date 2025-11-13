@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Filter Debug Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #0f172a; color: #e2e8f0; }
+    .test { margin: 10px 0; padding: 10px; background: rgba(30, 41, 59, 0.8); border-radius: 8px; }
+    .pass { border-left: 4px solid #10b981; }
+    .fail { border-left: 4px solid #f87171; }
+    h2 { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Filter Debug Test</h1>
+  <div id="output"></div>
+
+  <script type="module">
+    import { crossfilterX } from '@crossfilterx/core';
+
+    const output = document.getElementById('output');
+
+    function log(message, isPass) {
+      const div = document.createElement('div');
+      div.className = `test ${isPass ? 'pass' : 'fail'}`;
+      div.textContent = message;
+      output.appendChild(div);
+    }
+
+    function quantizeValue(value, min, max, bits) {
+      if (max <= min) return 0;
+      const range = (1 << bits) - 1;
+      const clamped = Math.min(Math.max(value, min), max);
+      const normalized = (clamped - min) / (max - min);
+      return Math.round(normalized * range);
+    }
+
+    async function testFiltering() {
+      const BINS = 1024;
+      const BITS = 10; // log2(1024) = 10
+      const scale = { min: 0, max: 23 }; // Hour scale
+
+      // Create simple test data: 100 flights evenly distributed across 24 hours
+      const flights = [];
+      for (let i = 0; i < 100; i++) {
+        flights.push({
+          hour: i % 24, // 0-23, repeating
+          distance: 1000,
+          delay: 0
+        });
+      }
+
+      // Count flights in each hour
+      const hourCounts = {};
+      flights.forEach(f => {
+        hourCounts[f.hour] = (hourCounts[f.hour] || 0) + 1;
+      });
+      log(`Hour counts: ${JSON.stringify(hourCounts)}`, true);
+
+      log(`Created ${flights.length} flights`, true);
+      log(`Hour distribution: ${flights.map(f => f.hour).join(', ')}`, true);
+
+      const cf = crossfilterX(flights, { bins: BINS });
+      const hourDim = cf.dimension('hour');
+      const hourGroup = cf.group('hour');
+
+      await cf.whenIdle();
+
+      const initialBins = hourGroup.bins();
+      const initialCount = Array.from(initialBins).reduce((sum, bin) => sum + bin, 0);
+      log(`Initial count: ${initialCount}`, initialCount === 100);
+
+      // Debug: Show which bins have data
+      const nonZeroBins = [];
+      for (let i = 0; i < initialBins.length; i++) {
+        if (initialBins[i] > 0) {
+          nonZeroBins.push(`bin ${i}: ${initialBins[i]} flights`);
+        }
+      }
+      log(`Non-zero bins (first 10): ${nonZeroBins.slice(0, 10).join(', ')}`, true);
+
+      // Test 1: Filter to hours 6-18 (should reduce count)
+      log('\\n--- Test 1: Filter hours 6-18 ---', true);
+      const minBin = quantizeValue(6, scale.min, scale.max, BITS);
+      const maxBin = quantizeValue(18, scale.min, scale.max, BITS);
+
+      log(`Min value: 6, bin: ${minBin}`, true);
+      log(`Max value: 18, bin: ${maxBin}`, true);
+
+      hourDim.filter([minBin, maxBin]);
+      await cf.whenIdle();
+
+      const filteredBins = hourGroup.bins();
+      const filteredCount = Array.from(filteredBins).reduce((sum, bin) => sum + bin, 0);
+      log(`Filtered count: ${filteredCount}`, true);
+      log(`Expected: less than 100`, filteredCount < 100);
+
+      if (filteredCount === initialCount) {
+        log('❌ FAIL: Filter did not reduce count!', false);
+      } else {
+        log(`✅ PASS: Count reduced from ${initialCount} to ${filteredCount}`, true);
+      }
+
+      // Test 2: Clear filter
+      log('\\n--- Test 2: Clear filter ---', true);
+      hourDim.clear();
+      await cf.whenIdle();
+
+      const clearedBins = hourGroup.bins();
+      const clearedCount = Array.from(clearedBins).reduce((sum, bin) => sum + bin, 0);
+      log(`Cleared count: ${clearedCount}`, true);
+
+      if (clearedCount === initialCount) {
+        log(`✅ PASS: Count restored to ${initialCount}`, true);
+      } else {
+        log(`❌ FAIL: Count not restored (${clearedCount} vs ${initialCount})`, false);
+      }
+
+      // Test 3: Very narrow filter (hours 10-12)
+      log('\\n--- Test 3: Narrow filter (hours 10-12) ---', true);
+      const narrowMin = quantizeValue(10, scale.min, scale.max, BITS);
+      const narrowMax = quantizeValue(12, scale.min, scale.max, BITS);
+
+      hourDim.filter([narrowMin, narrowMax]);
+      await cf.whenIdle();
+
+      const narrowBins = hourGroup.bins();
+      const narrowCount = Array.from(narrowBins).reduce((sum, bin) => sum + bin, 0);
+      log(`Narrow filter count: ${narrowCount}`, true);
+      log(`Expected: much less than 100`, narrowCount < 20);
+
+      if (narrowCount < initialCount / 2) {
+        log(`✅ PASS: Narrow filter works (${narrowCount} records)`, true);
+      } else {
+        log(`❌ FAIL: Narrow filter didn't filter enough`, false);
+      }
+    }
+
+    testFiltering().catch(error => {
+      log(`ERROR: ${error.message}`, false);
+      console.error(error);
+    });
+  </script>
+</body>
+</html>

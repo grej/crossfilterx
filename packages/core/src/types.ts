@@ -7,11 +7,17 @@
  */
 import type { ClearPlannerSnapshot } from './worker/clear-planner';
 
+export type DimensionOptions = {
+  bins?: number;
+  coarseTargetBins?: number;
+};
+
 export type CFOptions = {
   mode?: 'worker';
   bins?: number;
   prewarmDims?: string[];
   valueColumnNames?: string[];
+  dimensions?: Record<string, DimensionOptions>;
 };
 
 export type TypedArray =
@@ -66,6 +72,10 @@ export interface GroupHandle {
   top(k: number): Promise<Array<{ key: string | number; value: number }>>;
 
   bottom(k: number): Promise<Array<{ key: string | number; value: number }>>;
+
+  reduceMin(valueAccessor: string | ((d: any) => number)): this;
+
+  reduceMax(valueAccessor: string | ((d: any) => number)): this;
 }
 
 export interface CFHandle {

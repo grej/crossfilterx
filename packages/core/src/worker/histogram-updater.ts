@@ -35,6 +35,7 @@ export function shouldBufferHistogramUpdate(
 ): boolean {
   if (mode === 'direct') return false;
   if (mode === 'simd') return false;
+  if (mode === 'buffered') return true;
   if (mode === 'auto' && toggledRows < BUFFER_THRESHOLD_ROWS) {
     return false;
   }

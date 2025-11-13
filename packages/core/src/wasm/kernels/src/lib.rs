@@ -107,14 +107,9 @@ fn accumulate_simd(data: &[u16], counts: &mut [u32]) {
     unsafe {
         while index + LANES <= data.len() {
             let lane = v128_load(data.as_ptr().add(index) as *const _);
-            cache.increment(u16x8_extract_lane::<0>(lane) as usize, counts);
-            cache.increment(u16x8_extract_lane::<1>(lane) as usize, counts);
-            cache.increment(u16x8_extract_lane::<2>(lane) as usize, counts);
-            cache.increment(u16x8_extract_lane::<3>(lane) as usize, counts);
-            cache.increment(u16x8_extract_lane::<4>(lane) as usize, counts);
-            cache.increment(u16x8_extract_lane::<5>(lane) as usize, counts);
-            cache.increment(u16x8_extract_lane::<6>(lane) as usize, counts);
-            cache.increment(u16x8_extract_lane::<7>(lane) as usize, counts);
+            for i in 0..LANES {
+                cache.increment(u16x8_extract_lane(lane, i as u8) as usize, counts);
+            }
             index += LANES;
         }
     }
@@ -189,6 +184,7 @@ struct ShardCache {
     shard_bits: usize,
     shard_size: usize,
     slots: Vec<ShardSlot>,
+    shard_map: Vec<u8>,
     store: Vec<u32>,
     next_evict: usize,
     mask: usize,
@@ -202,6 +198,7 @@ impl ShardCache {
         } else {
             (1usize << shard_bits) - 1
         };
+        let shard_map_size = if shard_bits == 0 { 1 } else { 1 << (16 - shard_bits) };
         ShardCache {
             shard_bits,
             shard_size,
@@ -212,6 +209,7 @@ impl ShardCache {
                 };
                 slot_count
             ],
+            shard_map: vec![0; shard_map_size],
             store: vec![0u32; shard_size * slot_count],
             next_evict: 0,
             mask,
@@ -243,14 +241,11 @@ impl ShardCache {
     }
 
     fn ensure_slot(&mut self, shard_idx: usize, counts: &mut [u32]) -> usize {
-        if let Some(slot_index) = self
-            .slots
-            .iter()
-            .enumerate()
-            .find(|(_, slot)| slot.id == Some(shard_idx))
-            .map(|(index, _)| index)
-        {
-            return slot_index;
+        if shard_idx < self.shard_map.len() {
+            let slot_plus_one = self.shard_map[shard_idx];
+            if slot_plus_one > 0 {
+                return (slot_plus_one - 1) as usize;
+            }
         }
 
         if let Some(slot_index) = self.slots.iter().position(|slot| slot.id.is_none()) {
@@ -258,14 +253,25 @@ impl ShardCache {
             let slot = &mut self.slots[slot_index];
             slot.id = Some(shard_idx);
             slot.used = false;
+            if shard_idx < self.shard_map.len() {
+                self.shard_map[shard_idx] = (slot_index + 1) as u8;
+            }
             return slot_index;
         }
 
         let slot_index = self.next_evict % self.slots.len();
         self.flush_slot(slot_index, counts, FlushReason::Evict);
         self.reset_slot_counts(slot_index);
+        if let Some(old_shard_idx) = self.slots[slot_index].id {
+            if old_shard_idx < self.shard_map.len() {
+                self.shard_map[old_shard_idx] = 0;
+            }
+        }
         self.slots[slot_index].id = Some(shard_idx);
         self.slots[slot_index].used = false;
+        if shard_idx < self.shard_map.len() {
+            self.shard_map[shard_idx] = (slot_index + 1) as u8;
+        }
         self.next_evict = (slot_index + 1) % self.slots.len();
         slot_index
     }
@@ -326,6 +332,9 @@ impl ShardCache {
             self.flush_slot(slot_index, counts, FlushReason::Final);
             self.slots[slot_index].id = None;
             self.slots[slot_index].used = false;
+        }
+        for i in 0..self.shard_map.len() {
+            self.shard_map[i] = 0;
         }
     }
 }

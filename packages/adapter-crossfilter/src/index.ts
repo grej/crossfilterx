@@ -13,11 +13,8 @@ export type AdapterGroup = {
 export function adaptCrossfilter(handle: CFHandle) {
   return {
     dimension(selector: string | ((row: unknown) => number)) {
-      if (typeof selector !== 'string') {
-        throw new Error('Function-based selectors are not supported in the adapter yet.');
-      }
       const dimensionHandle = handle.dimension(selector);
-      return createAdapterDimension(dimensionHandle, handle, selector);
+      return createAdapterDimension(dimensionHandle, handle);
     },
     whenIdle() {
       return handle.whenIdle();
@@ -30,20 +27,19 @@ export function adaptCrossfilter(handle: CFHandle) {
 
 function createAdapterDimension(
   dimensionHandle: DimensionHandle,
-  handle: CFHandle,
-  name: string
+  handle: CFHandle
 ): AdapterDimension {
   return {
-    async filter(range: [number, number]) {
-      await dimensionHandle.filter(range);
-      await handle.whenIdle();
+    filter(range: [number, number]): Promise<void> {
+      dimensionHandle.filter(range);
+      return handle.whenIdle();
     },
-    async filterAll() {
-      await dimensionHandle.clear();
-      await handle.whenIdle();
+    filterAll(): Promise<void> {
+      dimensionHandle.clear();
+      return handle.whenIdle();
     },
     group() {
-      return createAdapterGroup(handle.group(name));
+      return createAdapterGroup(dimensionHandle.group());
     }
   };
 }
@@ -52,9 +48,10 @@ function createAdapterGroup(groupHandle: GroupHandle): AdapterGroup {
   return {
     all() {
       const bins = groupHandle.bins();
+      const keys = groupHandle.keys();
       const results: Array<{ key: number; value: number }> = new Array(bins.length);
       for (let i = 0; i < bins.length; i++) {
-        results[i] = { key: i, value: bins[i] };
+        results[i] = { key: keys[i], value: bins[i] };
       }
       return results;
     }

@@ -54,9 +54,9 @@ Run `npm run bench:micro` (optionally with `MICRO_OUTPUT=...`) to build the work
 
 | Mode     | Clear Avg (ms) | Filter Avg (ms) | Notes |
 |----------|---------------:|----------------:|-------|
-| direct   | ~16.9          | ~20.0           | CSR delta + direct histogram writes (auto/default) |
-| buffered | ~16.3          | ~20.1           | Uses Int32 buffers; enabled via `__CFX_HIST_MODE=buffered` |
-| simd     | ~16.7          | ~20.3           | Updated Rust SIMD kernel with shared scratch buffer; approaching parity with direct mode |
+| direct   | ~8.83          | ~0.02           | CSR delta + direct histogram writes (auto/default) |
+| buffered | ~8.66          | ~0.00           | Uses Int32 buffers; enabled via `__CFX_HIST_MODE=buffered` |
+| simd     | ~7.61          | ~0.01           | Updated Rust SIMD kernel with shared scratch buffer; approaching parity with direct mode |
 
 - Buffering is now opt-in (`BENCH_HIST_MODE=buffered` or `__CFX_HIST_MODE='buffered'`). The default `auto` mode sticks with direct updates until ≥2M rows toggle in a single clear, avoiding regressions on today’s workloads while keeping the infrastructure ready for SIMD experiments.
 - Set `BENCH_HIST_MODE=simd` to exercise the wasm-backed accumulator. The current kernel mirrors the JS logic (gathers bins per dimension); future SIMD optimisations will aim to reduce the ~17 ms clear latency further.

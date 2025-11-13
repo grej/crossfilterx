@@ -93,7 +93,7 @@ const dataset = columnarActive ? generateFlightsColumnar(ROW_COUNT) : generateFl
 const ingestStart = performance.now();
 const cf = crossfilterX(dataset, { bins: BINS });
 const distanceDim = cf.dimension('distance');
-const distanceGroup = cf.group('distance');
+const distanceGroup = cf.group('distance', { coarseTargetBins: 64 });
 const carrierGroup = cf.group('carrier');
 const departureGroup = cf.group('departure');
 
@@ -101,8 +101,10 @@ await cf.whenIdle();
 const ingestDuration = performance.now() - ingestStart;
 render();
 
-sliders.min.addEventListener('input', () => updateDistanceFilter());
-sliders.max.addEventListener('input', () => updateDistanceFilter());
+sliders.min.addEventListener('input', () => updateDistanceFilter(true));
+sliders.max.addEventListener('input', () => updateDistanceFilter(true));
+sliders.min.addEventListener('change', () => updateDistanceFilter(false));
+sliders.max.addEventListener('change', () => updateDistanceFilter(false));
 resetButton.addEventListener('click', () => {
   sliders.min.value = '0';
   sliders.max.value = '100';
@@ -114,38 +116,41 @@ resetButton.addEventListener('click', () => {
   });
 });
 
-function updateDistanceFilter() {
+function updateDistanceFilter(isCoarse = false) {
   const minPct = Math.min(Number(sliders.min.value), Number(sliders.max.value));
   const maxPct = Math.max(Number(sliders.min.value), Number(sliders.max.value));
   sliders.min.value = String(minPct);
   sliders.max.value = String(maxPct);
   const rangeDisplay = {
     min: Math.round(distanceScale.min + (minPct / 100) * (distanceScale.max - distanceScale.min)),
-    max: Math.round(distanceScale.min + (maxPct / 100) * (distanceScale.max - distanceScale.min)),
+    max: Math.round(distanceScale.min + (maxPct / 100) * (distanceScale.max - distanceScale.min))
   };
   const label = document.querySelector<HTMLLabelElement>('label');
   if (label) {
-  label.textContent = `Distance Range: ${formatNumber(rangeDisplay.min)} - ${formatNumber(rangeDisplay.max)} mi`;
+    label.textContent = `Distance Range: ${formatNumber(rangeDisplay.min)} - ${formatNumber(
+      rangeDisplay.max
+    )} mi`;
   }
   const lo = scalePercentToBin(minPct / 100, distanceScale, BINS);
   const hi = scalePercentToBin(maxPct / 100, distanceScale, BINS);
   distanceDim.filter([lo, hi]);
-  void cf.whenIdle().then(render);
+  void cf.whenIdle().then(() => render(isCoarse));
 }
 
-function render() {
+function render(isCoarse = false) {
   const activeCount = sumBins(carrierGroup.bins());
   summaries.rows.textContent = formatNumber(ROW_COUNT);
-  summaries.filter.textContent = `${formatNumber(activeCount)} (${((activeCount / ROW_COUNT) * 100).toFixed(1)}%)`;
+  summaries.filter.textContent = `${formatNumber(activeCount)} (${((
+    activeCount / ROW_COUNT
+  ) * 100).toFixed(1)}%)`;
   summaries.delay.textContent = renderAverageHour();
   summaries.ingest.textContent = `${ingestDuration.toFixed(1)} ms (${columnarActive ? 'columnar' : 'rows'})`;
   updatePlannerSummary();
 
-  drawHistogram(
-    canvases.distance,
-    downsample(distanceGroup.bins(), 64),
-    '#38bdf8'
-  );
+  const distanceBins = isCoarse ? distanceGroup.coarse()?.bins() : distanceGroup.bins();
+  if (distanceBins) {
+    drawHistogram(canvases.distance, downsample(distanceBins, 64), '#38bdf8');
+  }
   drawBars(canvases.carrier, extractCarriers(), '#f97316');
 }
 

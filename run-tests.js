@@ -11,7 +11,10 @@ const testFiles = [
   'packages/core/test/multidim-delta.test.ts',
   'packages/core/test/clear-heuristic.test.ts',
   'packages/core/test/controller-index.test.ts',
-  'packages/core/test/ingest-descriptor.test.ts'
+  'packages/core/test/ingest-descriptor.test.ts',
+  'packages/core/test/coarsening.test.ts',
+  'packages/core/test/reductions.test.ts',
+  'packages/core/test/top-k.test.ts'
 ];
 
 let index = 0;

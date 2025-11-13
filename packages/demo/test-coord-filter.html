@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test Coordinated Filtering</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #0f172a; color: #e2e8f0; }
+    .test { margin: 10px 0; padding: 10px; background: rgba(30, 41, 59, 0.8); border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Test Coordinated Filtering (like main demo)</h1>
+  <div id="output"></div>
+
+  <script type="module">
+    import { crossfilterX } from '@crossfilterx/core';
+
+    const output = document.getElementById('output');
+    function log(msg) {
+      const div = document.createElement('div');
+      div.className = 'test';
+      div.textContent = msg;
+      output.appendChild(div);
+    }
+
+    async function test() {
+      // Mimic main.ts exactly
+      const data = [];
+      for (let i = 0; i < 1000; i++) {
+        data.push({
+          carrier: Math.floor(Math.random() * 6), // 0-5
+          distance: 50 + Math.random() * 2950,    // 50-3000
+        });
+      }
+
+      log(`Created ${data.length} records`);
+
+      const cf = crossfilterX(data, { bins: 1024 });
+      const distanceDim = cf.dimension('distance');
+      const carrierGroup = cf.group('carrier');
+
+      await cf.whenIdle();
+
+      // Initial count
+      let bins = carrierGroup.bins();
+      let count = Array.from(bins).reduce((sum, bin) => sum + bin, 0);
+      log(`Initial count: ${count}`);
+
+      // Apply filter on distance (filter range 1000-2000)
+      const BITS = 10;
+      const scale = { min: 50, max: 3000 };
+
+      function quantize(value) {
+        if (scale.max <= scale.min) return 0;
+        const range = (1 << BITS) - 1;
+        const clamped = Math.min(Math.max(value, scale.min), scale.max);
+        const normalized = (clamped - scale.min) / (scale.max - scale.min);
+        return Math.round(normalized * range);
+      }
+
+      const minBin = quantize(1000);
+      const maxBin = quantize(2000);
+
+      log(`Filtering distance to bins [${minBin}, ${maxBin}] (values 1000-2000)`);
+
+      distanceDim.filter([minBin, maxBin]);
+      await cf.whenIdle();
+
+      // Get count from CARRIER group (different dimension!)
+      bins = carrierGroup.bins();
+      count = Array.from(bins).reduce((sum, bin) => sum + bin, 0);
+
+      log(`Count after filtering: ${count}`);
+      log(`Expected: approximately 1/3 of 1000 = ~333`);
+
+      if (count < 1000 && count > 0) {
+        log(`✅ SUCCESS! Coordinated filtering works`);
+      } else {
+        log(`❌ FAIL! Count should be less than 1000`);
+      }
+    }
+
+    test().catch(err => {
+      log(`ERROR: ${err.message}`);
+      console.error(err);
+    });
+  </script>
+</body>
+</html>

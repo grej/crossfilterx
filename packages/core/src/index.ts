@@ -32,12 +32,34 @@ class DimensionHandleImpl implements DimensionHandle {
     if (rangeOrSet instanceof Set) {
       throw new Error('Set-based filters not yet implemented.');
     }
-    this.pending = this.pending.then(() => this.withId((id) => this.controller.filterRange(id, rangeOrSet)));
+    // If dimension is ready, call filterRange immediately (synchronously starts the operation)
+    // Otherwise, chain it to the pending queue
+    const id = this.resolvedId;
+    if (id !== null) {
+      // Call synchronously to ensure trackFrame is called before returning
+      void this.controller.filterRange(id, rangeOrSet);
+    } else {
+      this.pending = this.pending.then(async () => {
+        const id = await this.idPromise;
+        await this.controller.filterRange(id, rangeOrSet);
+      });
+    }
     return this;
   }
 
   clear(): DimensionHandle {
-    this.pending = this.pending.then(() => this.withId((id) => this.controller.clearFilter(id)));
+    // If dimension is ready, call clearFilter immediately (synchronously starts the operation)
+    // Otherwise, chain it to the pending queue
+    const id = this.resolvedId;
+    if (id !== null) {
+      // Call synchronously to ensure trackFrame is called before returning
+      void this.controller.clearFilter(id);
+    } else {
+      this.pending = this.pending.then(async () => {
+        const id = await this.idPromise;
+        await this.controller.clearFilter(id);
+      });
+    }
     return this;
   }
 
@@ -130,6 +152,16 @@ class GroupHandleImpl implements GroupHandle {
   async bottom(k: number): Promise<Array<{ key: string | number; value: number }>> {
     return this.controller.getTopK(this.dimId, k, true);
   }
+
+  reduceMin(valueAccessor: string | ((d: any) => number)): this {
+    // To be implemented
+    return this;
+  }
+
+  reduceMax(valueAccessor: string | ((d: any) => number)): this {
+    // To be implemented
+    return this;
+  }
 }
 
 export const crossfilterX = (data: unknown, options: CFOptions = {}): CFHandle => {
@@ -197,20 +229,26 @@ function inferSchema(source: IngestSource, options: CFOptions): DimensionSpec[] 
     return keys.map((name) => {
       const value = first[name];
       const type = typeof value === 'number' ? 'number' : 'string';
+      const dimOptions = options.dimensions?.[name];
       return {
         name,
         type,
-        bits
+        bits: dimOptions?.bins ? resolveBits(dimOptions.bins) : bits,
+        coarseTargetBins: dimOptions?.coarseTargetBins
       } satisfies DimensionSpec;
     });
   }
   const keys = Object.keys(source.data.columns);
   const categories = source.data.categories ?? {};
-  return keys.map((name) => ({
-    name,
-    type: categories[name] ? 'string' : 'number',
-    bits
-  } satisfies DimensionSpec));
+  return keys.map((name) => {
+    const dimOptions = options.dimensions?.[name];
+    return {
+      name,
+      type: categories[name] ? 'string' : 'number',
+      bits: dimOptions?.bins ? resolveBits(dimOptions.bins) : bits,
+      coarseTargetBins: dimOptions?.coarseTargetBins
+    } satisfies DimensionSpec;
+  });
 }
 
 function resolveBits(bins?: number) {
