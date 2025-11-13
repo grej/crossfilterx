@@ -630,10 +630,13 @@ export const crossfilterX = (data: unknown, options: CFOptions = {}): CFHandle =
         return new DimensionHandleImpl(controller, id);
       }
       if (typeof nameOrAccessor === 'function') {
-        const promise = controller.createFunctionDimension(nameOrAccessor);
-        return new DimensionHandleImpl(controller, promise);
+        throw new Error(
+          'Function-based dimensions are not supported because they block the main thread. ' +
+          'Pre-compute values in your dataset instead. ' +
+          'See: https://github.com/grej/crossfilterx/blob/main/docs/function-dimensions.md'
+        );
       }
-      throw new Error('Dimension must be defined by a column name or accessor function.');
+      throw new Error('Dimension must be defined by a column name.');
     },
     group(name, options) {
       if (typeof name === 'string') {

@@ -149,7 +149,6 @@ export class WorkerController {
   private readonly source: IngestSource;
   private readonly options: CFOptions;
   private readonly schema: DimensionSpec[];
-  private functionCounter = 0;
   private readonly pendingDimensionResolvers = new Map<string, (dimId: number, snapshot: GroupSnapshot) => void>();
   private readonly topKResolvers = new Map<number, (results: Array<{ key: string | number; value: number }>) => void>();
   private readonly filterState = new Map<number, [number, number]>();
@@ -335,36 +334,6 @@ export class WorkerController {
     return promise;
   }
 
-  createFunctionDimension(accessor: (row: Record<string, unknown>) => unknown): Promise<number> {
-    const name = this.generateFunctionName(accessor.name || 'dimension');
-    const derived = this.buildDerivedColumn(name, accessor);
-    const dimId = this.schema.length;
-    this.schema.push({ name, type: derived.kind, bits: derived.bits });
-
-    const resolver = new Promise<number>((resolve) => {
-      this.pendingDimensionResolvers.set(name, (id, snapshot) => {
-        this.dimsByName.set(name, id);
-        this.groupState.set(id, snapshotToGroupState(snapshot));
-        this.indexInfo.set(id, { ready: false });
-        resolve(id);
-      });
-    });
-
-    const columnBuffer = derived.column.buffer.slice(0);
-    this.worker.postMessage({
-      t: 'ADD_DIMENSION',
-      name,
-      kind: derived.kind,
-      bits: derived.bits,
-      column: columnBuffer,
-      scale: derived.kind === 'number' ? derived.scale : null,
-      labels: derived.kind === 'string' ? derived.labels : null,
-      fallback: derived.kind === 'string' ? derived.fallback : 0
-    });
-
-    return resolver;
-  }
-
   private nextSeq() {
     return ++this.seq;
   }
@@ -514,16 +483,6 @@ export class WorkerController {
     }
   }
 
-  private generateFunctionName(base: string) {
-    const sanitized = base.replace(/\s+/g, '_').replace(/[^A-Za-z0-9_]/g, '').toLowerCase();
-    let candidate = sanitized ? `fn_${sanitized}` : `fn_${this.functionCounter}`;
-    while (this.dimsByName.has(candidate)) {
-      candidate = `${candidate}_${++this.functionCounter}`;
-    }
-    this.functionCounter++;
-    return candidate;
-  }
-
   private getRowCount() {
     if (this.source.kind === 'rows') {
       return this.source.data.length;
@@ -538,116 +497,6 @@ export class WorkerController {
     if (!bins) return DEFAULT_BITS;
     const bits = Math.ceil(Math.log2(bins));
     return Math.max(1, Math.min(MAX_BITS, bits));
-  }
-
-  private buildDerivedColumn(name: string, accessor: (row: Record<string, unknown>) => unknown) {
-    const rowCount = this.getRowCount();
-    if (rowCount > UI_BLOCKING_THRESHOLD) {
-      console.warn(
-        `[CrossfilterX] Creating function dimension on ${rowCount} rows. ` +
-          `This may block the UI thread. Consider pre-computing this dimension.`
-      );
-    }
-    const values = new Array<unknown>(rowCount);
-    this.forEachRow((row, index) => {
-      values[index] = accessor(row);
-    });
-
-    let sample = values.find((value) => value !== undefined && value !== null);
-    if (sample instanceof Date) {
-      sample = sample.valueOf();
-    }
-
-    if (typeof sample === 'number') {
-      return this.buildNumericColumn(values);
-    }
-
-    return this.buildStringColumn(values);
-  }
-
-  private buildNumericColumn(values: Array<unknown>) {
-    const rowCount = this.getRowCount();
-    const numbers = new Array<number>(rowCount);
-    let min = Number.POSITIVE_INFINITY;
-    let max = Number.NEGATIVE_INFINITY;
-    for (let index = 0; index < rowCount; index++) {
-      const numeric = Number(values[index]);
-      numbers[index] = numeric;
-      if (Number.isFinite(numeric)) {
-        if (numeric < min) min = numeric;
-        if (numeric > max) max = numeric;
-      }
-    }
-    if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) {
-      min = Number.isFinite(min) ? min : 0;
-      max = min + 1;
-    }
-    const bits = this.resolveBitsLocal();
-    const range = (1 << bits) - 1;
-    const span = max - min;
-    const invSpan = span > 0 && Number.isFinite(span) ? range / span : 0;
-    const scale: QuantizeScale = { min, max, bits, range, invSpan };
-    const column = new Uint16Array(rowCount);
-    for (let index = 0; index < rowCount; index++) {
-      const numeric = numbers[index];
-      column[index] = Number.isFinite(numeric) ? quantize(numeric, scale) : 0;
-    }
-    return { kind: 'number' as const, bits, column, scale };
-  }
-
-  private buildStringColumn(values: Array<unknown>) {
-    const rowCount = this.getRowCount();
-    const dictionary = new Map<string, number>();
-    const labels: string[] = [];
-    const column = new Uint16Array(rowCount);
-    for (let index = 0; index < rowCount; index++) {
-      const key = values[index] === undefined || values[index] === null ? '' : String(values[index]);
-      let code = dictionary.get(key);
-      if (code === undefined) {
-        code = labels.length;
-        if (code > MAX_CATEGORIES) {
-          throw new Error(`Function-based dimension exceeded ${MAX_CATEGORIES} unique categories.`);
-        }
-        dictionary.set(key, code);
-        labels.push(key);
-      }
-      column[index] = code;
-    }
-    const bits = Math.max(1, Math.ceil(Math.log2(Math.max(1, labels.length))));
-    const fallback = dictionary.get('') ?? 0;
-    return { kind: 'string' as const, bits, column, labels, fallback };
-  }
-
-  private forEachRow(callback: (row: Record<string, unknown>, index: number) => void) {
-    if (this.source.kind === 'rows') {
-      this.source.data.forEach((row, index) => callback(row, index));
-      return;
-    }
-    const { columns, categories } = this.source.data;
-    const names = Object.keys(columns);
-    const columnData = names.map((name) => ({
-      data: columns[name] as ArrayLike<number>,
-      labels: categories?.[name]
-    }));
-    const rowCount = this.getRowCount();
-    let currentIndex = 0;
-    const view: Record<string, unknown> = {};
-    columnData.forEach(({ data, labels }, idx) => {
-      Object.defineProperty(view, names[idx], {
-        enumerable: true,
-        get: () => {
-          const raw = data[currentIndex];
-          if (labels) {
-            const code = typeof raw === 'number' ? raw : Number(raw);
-            return labels[code] ?? labels[0] ?? '';
-          }
-          return raw;
-        }
-      });
-    });
-    for (currentIndex = 0; currentIndex < rowCount; currentIndex++) {
-      callback(view, currentIndex);
-    }
   }
 
   private markIndexBuilt(dimId: number, ms: number, bytes: number) {
