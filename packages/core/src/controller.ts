@@ -293,6 +293,10 @@ export class WorkerController {
     // Unregister from automatic cleanup (we're cleaning up manually)
     WorkerController.cleanup.unregister(this);
 
+    // CRITICAL: Clear message handler BEFORE terminating to release closure
+    // The onmessage closure captures 'this', preventing GC if worker object is retained
+    this.worker.onmessage = null;
+
     // Terminate worker
     this.worker.terminate();
 
@@ -446,7 +450,10 @@ export class WorkerController {
         break;
       case 'ERROR':
         console.error('[crossfilterx] worker error:', message.message);
-        this.resolveFrame();
+        // CRITICAL: Flush ALL pending resolvers, not just one
+        // Without this, accumulated promise resolvers leak memory
+        this.flushFrames();
+        this.flushIdle();
         break;
       default: {
         const neverMessage: never = message;
@@ -510,7 +517,13 @@ export class WorkerController {
       }
 
       if (snapshot.sum) {
-        state.sum = new Float64Array(snapshot.sum);
+        // Create view into SharedArrayBuffer instead of copying
+        // This prevents allocation on every frame update
+        state.sum = new Float64Array(
+          snapshot.sum,
+          0,
+          state.bins.length
+        );
       }
     }
   }
@@ -623,11 +636,23 @@ function snapshotToGroupState(snapshot: GroupSnapshot): GroupState {
   return state;
 }
 
+// Cache for common key array sizes to avoid repeated allocation
+// Keys are just sequential indices [0, 1, 2, ..., n-1]
+const KEYS_CACHE = new Map<number, Uint16Array | Float32Array>();
+
 function createKeys(length: number): Uint16Array | Float32Array {
+  // Check cache first for common sizes
+  const cached = KEYS_CACHE.get(length);
+  if (cached) return cached;
+
   if (length <= 0xffff) {
     const keys = new Uint16Array(length);
     for (let i = 0; i < length; i++) {
       keys[i] = i;
+    }
+    // Cache common power-of-2 sizes (256, 1024, 4096, 16384, 65536)
+    if (length === 256 || length === 1024 || length === 4096 || length === 16384 || length === 65536) {
+      KEYS_CACHE.set(length, keys);
     }
     return keys;
   }
