@@ -1,7 +1,7 @@
-export function estimateTouchedRows(counts: Uint32Array, ranges: Array<{ lo: number; hi: number }>) {
+export function estimateTouchedRows(counts: Uint32Array, ranges: Array<{ rangeMin: number; rangeMax: number }>) {
   let total = 0;
   for (const range of ranges) {
-    for (let bin = range.lo; bin <= range.hi; bin++) {
+    for (let bin = range.rangeMin; bin <= range.rangeMax; bin++) {
       total += counts[bin];
     }
   }

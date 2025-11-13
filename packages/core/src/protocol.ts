@@ -11,9 +11,9 @@
 export type MsgToWorker =
   | { t: 'INGEST'; schema: DimSpec[]; rows: ArrayBuffer | unknown[] | ColumnarPayload; valueColumnNames?: string[] }
   | { t: 'BUILD_INDEX'; dimId: number }
-  | { t: 'FILTER_SET'; dimId: number; lo: number; hi: number; seq: number }
+  | { t: 'FILTER_SET'; dimId: number; rangeMin: number; rangeMax: number; seq: number }
   | { t: 'FILTER_CLEAR'; dimId: number; seq: number }
-  | { t: 'ESTIMATE'; dimId: number; lo: number; hi: number }
+  | { t: 'ESTIMATE'; dimId: number; rangeMin: number; rangeMax: number }
   | { t: 'SWAP' }
   | { t: 'REQUEST_PLANNER' }
   | {
@@ -118,7 +118,7 @@ type EngineState = {
   activeRows: Uint8Array;
   indexes: CsrIndex[];
   indexReady: boolean[];
-  filters: Array<{ lo: number; hi: number } | null>;
+  filters: Array<{ rangeMin: number; rangeMax: number } | null>;
   activeCount: number;
   profile: ProfileCollector | null;
   profiling: boolean;
@@ -178,8 +178,8 @@ export function createProtocol(post: (message: MsgFromWorker) => void) {
           buildIndex(state, message.dimId, post);
           break;
         case 'FILTER_SET':
-          logger.log(`FILTER_SET received: dimId=${message.dimId}, range=[${message.lo}, ${message.hi}]`);
-          applyFilter(state, message.dimId, { lo: message.lo, hi: message.hi });
+          logger.log(`FILTER_SET received: dimId=${message.dimId}, range=[${message.rangeMin}, ${message.rangeMax}]`);
+          applyFilter(state, message.dimId, { rangeMin: message.rangeMin, rangeMax: message.rangeMax });
           logger.log(`After applyFilter, activeCount=${state.activeCount}`);
           handleFrame(message.seq, state, post);
           break;
@@ -356,7 +356,7 @@ function handleFrame(seq: number, state: EngineState, post: (message: MsgFromWor
   });
 }
 
-function applyFilter(state: EngineState, dimId: number, range: { lo: number; hi: number } | null) {
+function applyFilter(state: EngineState, dimId: number, range: { rangeMin: number; rangeMax: number } | null) {
   if (!state.layout) return;
   const previous = state.filters[dimId];
   state.filters[dimId] = range;
@@ -392,14 +392,14 @@ function applyFilter(state: EngineState, dimId: number, range: { lo: number; hi:
   const rowActivator = new RowActivator(state as unknown as RowActivatorState);
 
   if (diff.removed.length > 0) {
-    for (const [lo, hi] of diff.removed) {
-      applyRange(index, lo, hi, (row) => updateRowState(row, -1));
+    for (const [rangeMin, rangeMax] of diff.removed) {
+      applyRange(index, rangeMin, rangeMax, (row) => updateRowState(row, -1));
     }
   }
 
   if (diff.added.length > 0) {
-    for (const [lo, hi] of diff.added) {
-      applyRange(index, lo, hi, (row) => updateRowState(row, 1));
+    for (const [rangeMin, rangeMax] of diff.added) {
+      applyRange(index, rangeMin, rangeMax, (row) => updateRowState(row, 1));
     }
   }
 
@@ -419,7 +419,7 @@ function applyFilter(state: EngineState, dimId: number, range: { lo: number; hi:
   flushSimd(state);
 }
 
-function clearFilterRange(state: EngineState, dimId: number, previous: { lo: number; hi: number }) {
+function clearFilterRange(state: EngineState, dimId: number, previous: { rangeMin: number; rangeMax: number }) {
   const { layout } = state;
   if (!layout) return;
   const layoutRef = layout;
@@ -436,11 +436,11 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
   const bins = histograms[dimId].front.length;
   const rowActivator = new RowActivator(state as unknown as RowActivatorState);
 
-  const removeLo = Math.max(previous.lo, 0);
-  const removeHi = Math.min(previous.hi, bins - 1);
+  const removeMin = Math.max(previous.rangeMin, 0);
+  const removeMax = Math.min(previous.rangeMax, bins - 1);
 
   const offsets = index.binOffsets;
-  const insideCount = offsets[removeHi + 1] - offsets[removeLo];
+  const insideCount = offsets[removeMax + 1] - offsets[removeMin];
   const totalRows = state.rowCount;
   const outsideCount = totalRows - insideCount;
   const collector = state.profile;
@@ -481,7 +481,7 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
         insideRows: insideCount,
         outsideRows: outsideCount,
         outsideFraction,
-        rangeBins: removeHi >= removeLo ? removeHi - removeLo + 1 : 0,
+        rangeBins: removeMax >= removeMin ? removeMax - removeMin + 1 : 0,
         buffered: false
       };
     }
@@ -495,20 +495,20 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
     let outsideRowsVisited = 0;
     const insideStart = performance.now();
     const insideBuffers = allocateBuffers ? createHistogramBuffers(histograms.length, bins) : null;
-    applyRange(index, removeLo, removeHi, (row) => {
+    applyRange(index, removeMin, removeMax, (row) => {
       insideRowsVisited++;
       adjustRow(row, -1, insideBuffers);
     });
     const afterInside = performance.now();
     const outsideBuffers = allocateBuffers ? createHistogramBuffers(histograms.length, bins) : null;
-    if (removeLo > 0) {
-      applyRange(index, 0, removeLo - 1, (row) => {
+    if (removeMin > 0) {
+      applyRange(index, 0, removeMin - 1, (row) => {
         outsideRowsVisited++;
         adjustRow(row, 0, outsideBuffers);
       });
     }
-    if (removeHi < bins - 1) {
-      applyRange(index, removeHi + 1, bins - 1, (row) => {
+    if (removeMax < bins - 1) {
+      applyRange(index, removeMax + 1, bins - 1, (row) => {
         outsideRowsVisited++;
         adjustRow(row, 0, outsideBuffers);
       });
@@ -528,7 +528,7 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
       outsideMs,
       totalMs,
       outsideFraction,
-      rangeBins: removeHi >= removeLo ? removeHi - removeLo + 1 : 0,
+      rangeBins: removeMax >= removeMin ? removeMax - removeMin + 1 : 0,
       buffered: allowBuffers && buffersEnabled
     };
     state.planner.record('delta', totalMs, insideRowsVisited + outsideRowsVisited);
@@ -536,22 +536,22 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
     const deltaStart = performance.now();
     let rowsVisited = 0;
     const insideBuffers = allocateBuffers ? createHistogramBuffers(histograms.length, bins) : null;
-    applyRange(index, removeLo, removeHi, (row) => {
+    applyRange(index, removeMin, removeMax, (row) => {
       rowsVisited++;
       adjustRow(row, -1, insideBuffers);
     });
     flushHistogramBuffers(insideBuffers, histograms);
 
     const outsideBuffers = allocateBuffers ? createHistogramBuffers(histograms.length, bins) : null;
-    if (removeLo > 0) {
-      applyRange(index, 0, removeLo - 1, (row) => {
+    if (removeMin > 0) {
+      applyRange(index, 0, removeMin - 1, (row) => {
         rowsVisited++;
         adjustRow(row, 0, outsideBuffers);
       });
     }
 
-    if (removeHi < bins - 1) {
-      applyRange(index, removeHi + 1, bins - 1, (row) => {
+    if (removeMax < bins - 1) {
+      applyRange(index, removeMax + 1, bins - 1, (row) => {
         rowsVisited++;
         adjustRow(row, 0, outsideBuffers);
       });
@@ -648,28 +648,28 @@ function exhaustive(value: never): never {
 }
 
 function diffRanges(
-  previous: { lo: number; hi: number },
-  next: { lo: number; hi: number }
+  previous: { rangeMin: number; rangeMax: number },
+  next: { rangeMin: number; rangeMax: number }
 ): { added: Array<[number, number]>; removed: Array<[number, number]> } | null {
-  if (previous.lo === next.lo && previous.hi === next.hi) {
+  if (previous.rangeMin === next.rangeMin && previous.rangeMax === next.rangeMax) {
     return null;
   }
 
   const added: Array<[number, number]> = [];
   const removed: Array<[number, number]> = [];
 
-  if (next.lo < previous.lo) {
-    added.push([next.lo, Math.min(previous.lo - 1, next.hi)]);
+  if (next.rangeMin < previous.rangeMin) {
+    added.push([next.rangeMin, Math.min(previous.rangeMin - 1, next.rangeMax)]);
   }
-  if (next.hi > previous.hi) {
-    added.push([Math.max(previous.hi + 1, next.lo), next.hi]);
+  if (next.rangeMax > previous.rangeMax) {
+    added.push([Math.max(previous.rangeMax + 1, next.rangeMin), next.rangeMax]);
   }
 
-  if (previous.lo < next.lo) {
-    removed.push([previous.lo, Math.min(next.lo - 1, previous.hi)]);
+  if (previous.rangeMin < next.rangeMin) {
+    removed.push([previous.rangeMin, Math.min(next.rangeMin - 1, previous.rangeMax)]);
   }
-  if (previous.hi > next.hi) {
-    removed.push([Math.max(next.hi + 1, previous.lo), previous.hi]);
+  if (previous.rangeMax > next.rangeMax) {
+    removed.push([Math.max(next.rangeMax + 1, previous.rangeMin), previous.rangeMax]);
   }
 
   return { added: normalizeRanges(added), removed: normalizeRanges(removed) };
@@ -677,14 +677,14 @@ function diffRanges(
 
 function normalizeRanges(ranges: Array<[number, number]>) {
   return ranges
-    .map(([lo, hi]) => (lo <= hi ? [lo, hi] : null))
+    .map(([rangeMin, rangeMax]) => (rangeMin <= rangeMax ? [rangeMin, rangeMax] : null))
     .filter((segment): segment is [number, number] => segment !== null);
 }
 
-function applyRange(index: CsrIndex, lo: number, hi: number, visit: (row: number) => void) {
+function applyRange(index: CsrIndex, rangeMin: number, rangeMax: number, visit: (row: number) => void) {
   const { rowIdsByBin, binOffsets } = index;
-  const end = Math.min(hi, binOffsets.length - 2);
-  const start = Math.max(lo, 0);
+  const end = Math.min(rangeMax, binOffsets.length - 2);
+  const start = Math.max(rangeMin, 0);
   for (let bin = start; bin <= end; bin++) {
     const binStart = binOffsets[bin];
     const binEnd = binOffsets[bin + 1];
@@ -694,7 +694,7 @@ function applyRange(index: CsrIndex, lo: number, hi: number, visit: (row: number
   }
 }
 
-function countActiveFilters(filters: Array<{ lo: number; hi: number } | null>) {
+function countActiveFilters(filters: Array<{ rangeMin: number; rangeMax: number } | null>) {
   let count = 0;
   for (const filter of filters) {
     if (filter) count++;
@@ -790,7 +790,7 @@ function buildIndex(state: EngineState, dimId: number, post: (message: MsgFromWo
 }
 
 function evaluateRow(
-  filters: Array<{ lo: number; hi: number } | null>,
+  filters: Array<{ rangeMin: number; rangeMax: number } | null>,
   columns: Uint16Array[],
   row: number
 ) {
@@ -800,7 +800,7 @@ function evaluateRow(
     const filter = filters[dim];
     if (!filter) continue;
     const value = columns[dim][row];
-    if (value < filter.lo || value > filter.hi) {
+    if (value < filter.rangeMin || value > filter.rangeMax) {
       passes = false;
       continue;
     }

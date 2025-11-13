@@ -87,7 +87,7 @@ export class WorkerController {
 
   filterRange(dimId: number, range: [number, number]) {
     this.logger.log(`filterRange CALLED: dimId=${dimId}, range=[${range}], readyResolved=${this.readyResolved}`);
-    const [lo, hi] = range;
+    const [rangeMin, rangeMax] = range;
     this.filterState.set(dimId, range);
 
     // If ready, call trackFrame synchronously (before any async)
@@ -96,8 +96,8 @@ export class WorkerController {
       return this.trackFrame({
         t: 'FILTER_SET',
         dimId,
-        lo,
-        hi,
+        rangeMin,
+        rangeMax,
         seq: this.nextSeq()
       });
     }
@@ -107,8 +107,8 @@ export class WorkerController {
       return this.trackFrame({
         t: 'FILTER_SET',
         dimId,
-        lo,
-        hi,
+        rangeMin,
+        rangeMax,
         seq: this.nextSeq()
       });
     });

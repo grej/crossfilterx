@@ -29,34 +29,34 @@ describe('clear heuristic profiling', () => {
   });
 
   it('falls back to full recompute for narrow ranges', () => {
-    const profile = runClearScenario({ lo: 7, hi: 8 });
+    const profile = runClearScenario({ rangeMin: 7, rangeMax: 8 });
     expect(profile?.fallback).toBe(true);
   });
 
   it('uses CSR delta for wide ranges', () => {
-    const profile = runClearScenario({ lo: 1, hi: 14 });
+    const profile = runClearScenario({ rangeMin: 1, rangeMax: 14 });
     expect(profile?.fallback).toBe(false);
   });
 
   it('falls back for mid-width ranges', () => {
-    const profile = runClearScenario({ lo: 4, hi: 11 });
+    const profile = runClearScenario({ rangeMin: 4, rangeMax: 11 });
     expect(profile?.fallback).toBe(true);
   });
 
   it('preserves histogram totals after CSR clear', () => {
-    const profile = runClearScenario({ lo: 2, hi: 13 }, true);
+    const profile = runClearScenario({ rangeMin: 2, rangeMax: 13 }, true);
     expect(profile?.fallback).toBe(false);
   });
 
   it('marks buffered clears when histogram buffering is forced', () => {
     (globalThis as Record<string, unknown>)[MODE_FLAG] = 'buffered';
-    const profile = runClearScenario({ lo: 2, hi: 13 }, true);
+    const profile = runClearScenario({ rangeMin: 2, rangeMax: 13 }, true);
     expect(profile?.fallback).toBe(false);
     expect(profile?.buffered).toBe(true);
   });
 });
 
-type RangeBins = { lo: number; hi: number };
+type RangeBins = { rangeMin: number; rangeMax: number };
 
 function runClearScenario(range: RangeBins, verifyCounts = false) {
   (globalThis as Record<string, unknown>)[PROFILE_FLAG] = true;
@@ -74,8 +74,8 @@ function runClearScenario(range: RangeBins, verifyCounts = false) {
   const filter: MsgToWorker = {
     t: 'FILTER_SET',
     dimId: 0,
-    lo: range.lo,
-    hi: range.hi,
+    rangeMin: range.rangeMin,
+    rangeMax: range.rangeMax,
     seq: 1
   };
   handleMessage(filter);

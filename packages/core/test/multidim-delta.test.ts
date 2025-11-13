@@ -21,13 +21,13 @@ describe('multi-dimension delta', () => {
     ];
     handleMessage({ t: 'INGEST', schema, rows });
 
-    const loA = quantize(1, 0, 3, 4);
-    const hiA = quantize(3, 0, 3, 4);
-    handleMessage({ t: 'FILTER_SET', dimId: 0, lo: loA, hi: hiA, seq: 1 });
+    const rangeMinA = quantize(1, 0, 3, 4);
+    const rangeMaxA = quantize(3, 0, 3, 4);
+    handleMessage({ t: 'FILTER_SET', dimId: 0, rangeMin: rangeMinA, rangeMax: rangeMaxA, seq: 1 });
 
-    const loB = quantize(12, 10, 13, 4);
-    const hiB = quantize(13, 10, 13, 4);
-    handleMessage({ t: 'FILTER_SET', dimId: 1, lo: loB, hi: hiB, seq: 2 });
+    const rangeMinB = quantize(12, 10, 13, 4);
+    const rangeMaxB = quantize(13, 10, 13, 4);
+    handleMessage({ t: 'FILTER_SET', dimId: 1, rangeMin: rangeMinB, rangeMax: rangeMaxB, seq: 2 });
 
     const frame = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 2);
     expect(frame && frame.t === 'FRAME' ? frame.activeCount : null).toBe(2);
@@ -52,21 +52,21 @@ describe('multi-dimension delta', () => {
     ];
     handleMessage({ t: 'INGEST', schema, rows });
 
-    const loA = quantize(1, 0, 4, 4);
-    const hiA = quantize(3, 0, 4, 4);
-    handleMessage({ t: 'FILTER_SET', dimId: 0, lo: loA, hi: hiA, seq: 1 });
+    const rangeMinA = quantize(1, 0, 4, 4);
+    const rangeMaxA = quantize(3, 0, 4, 4);
+    handleMessage({ t: 'FILTER_SET', dimId: 0, rangeMin: rangeMinA, rangeMax: rangeMaxA, seq: 1 });
     const first = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 1);
     expect(first && first.t === 'FRAME' ? first.activeCount : null).toBe(3);
 
-    const loA2 = quantize(2, 0, 4, 4);
-    const hiA2 = quantize(4, 0, 4, 4);
-    handleMessage({ t: 'FILTER_SET', dimId: 0, lo: loA2, hi: hiA2, seq: 2 });
+    const rangeMinA2 = quantize(2, 0, 4, 4);
+    const rangeMaxA2 = quantize(4, 0, 4, 4);
+    handleMessage({ t: 'FILTER_SET', dimId: 0, rangeMin: rangeMinA2, rangeMax: rangeMaxA2, seq: 2 });
     const widened = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 2);
     expect(widened && widened.t === 'FRAME' ? widened.activeCount : null).toBe(3);
 
-    const loB = quantize(15, 0, 40, 4);
-    const hiB = quantize(35, 0, 40, 4);
-    handleMessage({ t: 'FILTER_SET', dimId: 1, lo: loB, hi: hiB, seq: 3 });
+    const rangeMinB = quantize(15, 0, 40, 4);
+    const rangeMaxB = quantize(35, 0, 40, 4);
+    handleMessage({ t: 'FILTER_SET', dimId: 1, rangeMin: rangeMinB, rangeMax: rangeMaxB, seq: 3 });
     const secondDim = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 3);
     expect(secondDim && secondDim.t === 'FRAME' ? secondDim.activeCount : null).toBe(2);
 
