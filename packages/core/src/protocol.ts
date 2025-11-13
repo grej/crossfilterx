@@ -608,7 +608,9 @@ function fullRecompute(state: EngineState) {
 
   const { columns, histograms, filters, reductions } = state;
   const rowCount = state.rowCount;
+  const rowActivator = new RowActivator(state as unknown as RowActivatorState);
 
+  // Clear all state
   for (const histogram of histograms) {
     histogram.front.fill(0);
     histogram.back.fill(0);
@@ -616,6 +618,12 @@ function fullRecompute(state: EngineState) {
   for (const reduction of reductions.values()) {
     reduction.sumBuffers.front.fill(0);
     reduction.sumBuffers.back.fill(0);
+  }
+  for (const coarse of state.coarseHistograms) {
+    if (coarse && coarse.front.length > 0) {
+      coarse.front.fill(0);
+      coarse.back.fill(0);
+    }
   }
   layout.refcount.fill(0);
   layout.activeMask.fill(0);
@@ -628,40 +636,11 @@ function fullRecompute(state: EngineState) {
 
     if (!passes) continue;
     activeCount++;
-    state.activeRows[row] = 1;
-    setMask(layout.activeMask, row, true);
-    for (let dim = 0; dim < histograms.length; dim++) {
-      const bin = columns[dim][row];
-      histograms[dim].front[bin]++;
-      histograms[dim].back[bin]++;
-    }
-    for (const [dimId, reduction] of reductions) {
-      const bin = columns[dimId][row];
-      const value = reduction.valueColumn[row];
-      reduction.sumBuffers.front[bin] += value;
-      reduction.sumBuffers.back[bin] += value;
-    }
+    // Use RowActivator for consistency and automatic SIMD/coarse histogram support
+    rowActivator.activate(row);
   }
 
   state.activeCount = activeCount;
-
-  // NEW: Compute coarse histograms from fine
-  for (let dim = 0; dim < state.histograms.length; dim++) {
-    const coarse = state.coarseHistograms[dim];
-    if (!coarse || coarse.front.length === 0) continue;
-
-    const fine = state.histograms[dim];
-    const factor = Math.ceil(fine.front.length / coarse.front.length);
-
-    coarse.front.fill(0);
-    coarse.back.fill(0);
-
-    for (let i = 0; i < fine.front.length; i++) {
-      const coarseIdx = Math.floor(i / factor);
-      coarse.front[coarseIdx] += fine.front[i];
-      coarse.back[coarseIdx] += fine.back[i];
-    }
-  }
 }
 
 function exhaustive(value: never): never {
