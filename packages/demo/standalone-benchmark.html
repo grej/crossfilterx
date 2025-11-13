@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Standalone Deep Comparison Benchmark</title>
+    <script src="https://cdn.jsdelivr.net/npm/crossfilter2@1.5.4/crossfilter.min.js"></script>
+    <style>
+      :root {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      body {
+        margin: 0;
+        padding: 2rem;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      h1 {
+        margin: 0 0 1rem;
+        font-size: 2rem;
+        font-weight: 700;
+      }
+      .subtitle {
+        opacity: 0.7;
+        margin-bottom: 2rem;
+      }
+      button {
+        background: rgba(56, 189, 248, 0.2);
+        border: 1px solid #38bdf8;
+        color: #38bdf8;
+        font-size: 0.9rem;
+        font-weight: 600;
+        padding: 0.75rem 1.5rem;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        margin-right: 0.75rem;
+        margin-bottom: 0.75rem;
+      }
+      button:hover:not(:disabled) {
+        background: rgba(56, 189, 248, 0.3);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .status {
+        background: rgba(30, 41, 59, 0.5);
+        padding: 1rem 1.5rem;
+        border-radius: 12px;
+        margin: 1.5rem 0;
+        border: 1px solid rgba(148, 163, 184, 0.1);
+      }
+      .status.running {
+        border-color: #f59e0b;
+        background: rgba(245, 158, 11, 0.1);
+      }
+      .status.complete {
+        border-color: #10b981;
+        background: rgba(16, 185, 129, 0.1);
+      }
+      .results {
+        background: rgba(30, 41, 59, 0.5);
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin-top: 1.5rem;
+        border: 1px solid rgba(148, 163, 184, 0.1);
+      }
+      .results h2 {
+        margin: 0 0 1rem;
+        font-size: 1.25rem;
+      }
+      .results table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+      }
+      .results th,
+      .results td {
+        text-align: left;
+        padding: 0.75rem 0.5rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+      }
+      .results th {
+        font-weight: 600;
+        color: #cbd5e1;
+      }
+      .better {
+        color: #10b981;
+        font-weight: 600;
+      }
+      .worse {
+        color: #f87171;
+      }
+      pre {
+        background: rgba(15, 23, 42, 0.6);
+        padding: 1rem;
+        border-radius: 6px;
+        overflow-x: auto;
+        font-size: 0.85rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Standalone Deep Comparison Benchmark</h1>
+    <p class="subtitle">
+      Quick benchmark comparing CrossfilterX vs Crossfilter2 (50K rows, 4 dimensions)
+    </p>
+
+    <div>
+      <button id="run-benchmark" onclick="runBenchmark()">Run Benchmark</button>
+      <button id="show-json" onclick="showJSON()" disabled>Show JSON Results</button>
+    </div>
+
+    <div id="status" class="status" style="display: none;">
+      <strong>Status:</strong> <span id="status-text">Ready</span>
+    </div>
+
+    <div id="results" style="display: none;"></div>
+
+    <script type="module">
+      import { crossfilterX } from '/packages/core/dist/index.js';
+
+      let benchmarkResults = null;
+
+      function randomNormal(mean, std, min, max) {
+        let u = 0, v = 0;
+        while (u === 0) u = Math.random();
+        while (v === 0) v = Math.random();
+        const num = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+        let result = mean + std * num;
+        if (min !== undefined) result = Math.max(min, result);
+        if (max !== undefined) result = Math.min(max, result);
+        return result;
+      }
+
+      function generateData(size, dimensions) {
+        console.log(`Generating ${size} rows with ${dimensions} dimensions...`);
+        const baseSize = Math.min(size, 10000);
+        const baseData = [];
+
+        for (let i = 0; i < baseSize; i++) {
+          const row = { id: i };
+          for (let d = 0; d < dimensions; d++) {
+            if (d % 4 === 0) {
+              row[`dim${d}`] = Math.floor(Math.random() * 24);
+            } else if (d % 4 === 1) {
+              row[`dim${d}`] = Math.floor(randomNormal(5, 25, -60, 150));
+            } else if (d % 4 === 2) {
+              row[`dim${d}`] = Math.floor(randomNormal(700, 400, 50, 2000));
+            } else {
+              row[`dim${d}`] = Math.floor((i / baseSize) * 90 + Math.random() * 10);
+            }
+          }
+          baseData.push(row);
+        }
+
+        if (size > baseSize) {
+          const data = [];
+          const copies = Math.ceil(size / baseSize);
+          for (let c = 0; c < copies; c++) {
+            for (let i = 0; i < baseSize && data.length < size; i++) {
+              data.push({ ...baseData[i], id: data.length });
+            }
+          }
+          return data;
+        }
+        return baseData;
+      }
+
+      async function benchmarkCrossfilterX(data, dimensionCount) {
+        console.log('Benchmarking CrossfilterX...');
+        const ingestStart = performance.now();
+        const cfx = crossfilterX(data, { bins: 1024 });
+        const dimensions = [];
+        const groups = [];
+        for (let i = 0; i < dimensionCount; i++) {
+          dimensions.push(cfx.dimension(`dim${i}`));
+          groups.push(cfx.group(`dim${i}`));
+        }
+        await cfx.whenIdle();
+        const ingestTime = performance.now() - ingestStart;
+
+        const firstFilterStart = performance.now();
+        dimensions[0].filter([200, 800]);
+        await cfx.whenIdle();
+        const firstFilterTime = performance.now() - firstFilterStart;
+
+        const filterTimings = [];
+        for (let i = 0; i < 20; i++) {
+          const dim = dimensions[i % dimensionCount];
+          const start = performance.now();
+          dim.filter([Math.random() * 500, 500 + Math.random() * 500]);
+          await cfx.whenIdle();
+          filterTimings.push(performance.now() - start);
+          dim.clear();
+          await cfx.whenIdle();
+        }
+        const avgFilterTime = filterTimings.reduce((a, b) => a + b, 0) / filterTimings.length;
+
+        const groupAllStart = performance.now();
+        const bins = groups[0].bins();
+        const count = bins.reduce((sum, val) => sum + val, 0);
+        const groupAllTime = performance.now() - groupAllStart;
+
+        return {
+          ingestTime: ingestTime.toFixed(2),
+          firstFilterTime: firstFilterTime.toFixed(2),
+          avgFilterTime: avgFilterTime.toFixed(2),
+          groupAllTime: groupAllTime.toFixed(2),
+          dimensionSize: count,
+          throughput: (data.length / (ingestTime / 1000)).toFixed(0)
+        };
+      }
+
+      function benchmarkCrossfilter2(data, dimensionCount) {
+        console.log('Benchmarking Crossfilter2...');
+        const ingestStart = performance.now();
+        const cf = window.crossfilter(data);
+        const dimensions = [];
+        const groups = [];
+        for (let i = 0; i < dimensionCount; i++) {
+          dimensions.push(cf.dimension(d => d[`dim${i}`]));
+          groups.push(dimensions[i].group());
+        }
+        const ingestTime = performance.now() - ingestStart;
+
+        const firstFilterStart = performance.now();
+        dimensions[0].filter([200, 800]);
+        const firstFilterTime = performance.now() - firstFilterStart;
+
+        const filterTimings = [];
+        for (let i = 0; i < 20; i++) {
+          const dim = dimensions[i % dimensionCount];
+          const start = performance.now();
+          const minVal = Math.random() * 500;
+          const maxVal = 500 + Math.random() * 500;
+          dim.filter([minVal, maxVal]);
+          filterTimings.push(performance.now() - start);
+          dim.filterAll();
+        }
+        const avgFilterTime = filterTimings.reduce((a, b) => a + b, 0) / filterTimings.length;
+
+        const groupAllStart = performance.now();
+        const allData = groups[0].all();
+        const count = cf.groupAll().value();
+        const groupAllTime = performance.now() - groupAllStart;
+
+        return {
+          ingestTime: ingestTime.toFixed(2),
+          firstFilterTime: firstFilterTime.toFixed(2),
+          avgFilterTime: avgFilterTime.toFixed(2),
+          groupAllTime: groupAllTime.toFixed(2),
+          dimensionSize: count,
+          throughput: (data.length / (ingestTime / 1000)).toFixed(0)
+        };
+      }
+
+      window.runBenchmark = async function() {
+        const btn = document.getElementById('run-benchmark');
+        const status = document.getElementById('status');
+        const statusText = document.getElementById('status-text');
+        const results = document.getElementById('results');
+
+        btn.disabled = true;
+        status.style.display = 'block';
+        status.className = 'status running';
+        statusText.textContent = 'Generating data...';
+
+        const data = generateData(50000, 4);
+
+        statusText.textContent = 'Running CrossfilterX benchmark...';
+        const cfxResults = await benchmarkCrossfilterX(data, 4);
+
+        statusText.textContent = 'Running Crossfilter2 benchmark...';
+        const cfResults = benchmarkCrossfilter2(data, 4);
+
+        status.className = 'status complete';
+        statusText.textContent = 'Benchmark complete!';
+
+        const speedup = (parseFloat(cfResults.avgFilterTime) / parseFloat(cfxResults.avgFilterTime)).toFixed(2);
+
+        benchmarkResults = {
+          config: { size: 50000, dimensions: 4 },
+          crossfilterX: cfxResults,
+          crossfilter2: cfResults,
+          speedup: speedup,
+          timestamp: new Date().toISOString()
+        };
+
+        results.style.display = 'block';
+        results.innerHTML = `
+          <h2>Benchmark Results (50K rows, 4 dimensions)</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>CrossfilterX</th>
+                <th>Crossfilter2</th>
+                <th>Winner</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Ingest Time</td>
+                <td>${cfxResults.ingestTime} ms</td>
+                <td>${cfResults.ingestTime} ms</td>
+                <td class="${parseFloat(cfxResults.ingestTime) < parseFloat(cfResults.ingestTime) ? 'better' : ''}">
+                  ${parseFloat(cfxResults.ingestTime) < parseFloat(cfResults.ingestTime) ? 'CrossfilterX' : 'Crossfilter2'}
+                </td>
+              </tr>
+              <tr>
+                <td>First Filter Time</td>
+                <td>${cfxResults.firstFilterTime} ms</td>
+                <td>${cfResults.firstFilterTime} ms</td>
+                <td class="${parseFloat(cfxResults.firstFilterTime) < parseFloat(cfResults.firstFilterTime) ? 'better' : ''}">
+                  ${parseFloat(cfxResults.firstFilterTime) < parseFloat(cfResults.firstFilterTime) ? 'CrossfilterX' : 'Crossfilter2'}
+                </td>
+              </tr>
+              <tr>
+                <td>Avg Filter Time (20 ops)</td>
+                <td>${cfxResults.avgFilterTime} ms</td>
+                <td>${cfResults.avgFilterTime} ms</td>
+                <td class="${parseFloat(cfxResults.avgFilterTime) < parseFloat(cfResults.avgFilterTime) ? 'better' : ''}">
+                  ${parseFloat(cfxResults.avgFilterTime) < parseFloat(cfResults.avgFilterTime) ? 'CrossfilterX' : 'Crossfilter2'}
+                  (${speedup}x)
+                </td>
+              </tr>
+              <tr>
+                <td>Group All Time</td>
+                <td>${cfxResults.groupAllTime} ms</td>
+                <td>${cfResults.groupAllTime} ms</td>
+                <td class="${parseFloat(cfxResults.groupAllTime) < parseFloat(cfResults.groupAllTime) ? 'better' : ''}">
+                  ${parseFloat(cfxResults.groupAllTime) < parseFloat(cfResults.groupAllTime) ? 'CrossfilterX' : 'Crossfilter2'}
+                </td>
+              </tr>
+              <tr>
+                <td>Throughput (rows/sec)</td>
+                <td>${cfxResults.throughput}</td>
+                <td>${cfResults.throughput}</td>
+                <td class="${parseInt(cfxResults.throughput) > parseInt(cfResults.throughput) ? 'better' : ''}">
+                  ${parseInt(cfxResults.throughput) > parseInt(cfResults.throughput) ? 'CrossfilterX' : 'Crossfilter2'}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        `;
+
+        btn.disabled = false;
+        document.getElementById('show-json').disabled = false;
+
+        console.log('Full results:', benchmarkResults);
+      };
+
+      window.showJSON = function() {
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(benchmarkResults, null, 2);
+        document.getElementById('results').appendChild(pre);
+        document.getElementById('show-json').disabled = true;
+      };
+    </script>
+  </body>
+</html>
