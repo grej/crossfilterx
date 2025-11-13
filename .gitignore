@@ -9,4 +9,14 @@ packages/core/src/wasm/pkg/
 !packages/core/src/wasm/pkg/*.d.ts
 crossfilterx_context.txt
 digest.txt
-*.json
+
+# Rust build artifacts
+**/target/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Playwright test reports and results
+playwright-report/
+test-results/
+playwright/.cache/
