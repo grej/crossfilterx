@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json && cp src/worker.ts dist/worker.ts",
+    "build": "tsc --project tsconfig.json && cp src/worker.ts dist/worker.ts && mkdir -p dist/wasm/pkg && cp -r src/wasm/pkg/* dist/wasm/pkg/",
     "dev": "vite",
     "test": "vitest run --dir test"
   },
