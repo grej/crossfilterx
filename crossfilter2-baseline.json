@@ -1,0 +1,47 @@
+[
+  {
+    "config": {
+      "size": 10000,
+      "dimensions": 4
+    },
+    "crossfilter2": {
+      "ingestTime": 22,
+      "firstFilterTime": 4,
+      "avgFilterTime": 0.55,
+      "groupAllTime": 2,
+      "dimensionSize": 10000,
+      "throughput": 454545
+    },
+    "timestamp": "2025-11-13T13:01:20.626Z"
+  },
+  {
+    "config": {
+      "size": 50000,
+      "dimensions": 4
+    },
+    "crossfilter2": {
+      "ingestTime": 101,
+      "firstFilterTime": 7,
+      "avgFilterTime": 2.45,
+      "groupAllTime": 5,
+      "dimensionSize": 50000,
+      "throughput": 495050
+    },
+    "timestamp": "2025-11-13T13:01:21.360Z"
+  },
+  {
+    "config": {
+      "size": 100000,
+      "dimensions": 4
+    },
+    "crossfilter2": {
+      "ingestTime": 165,
+      "firstFilterTime": 4,
+      "avgFilterTime": 4.4,
+      "groupAllTime": 1,
+      "dimensionSize": 100000,
+      "throughput": 606061
+    },
+    "timestamp": "2025-11-13T13:01:22.232Z"
+  }
+]
