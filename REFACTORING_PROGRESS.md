@@ -12,11 +12,11 @@
 **Impact:** Centralized all console.log statements in controller.ts and protocol.ts
 **Tests:** All 17 test files passing (19 tests)
 
-### 1.2 Extract RowActivator Module ⏳
-**Status:** In Progress
+### 1.2 Extract RowActivator Module ✅
+**Status:** Complete
 **Files:** `packages/core/src/engine/row-activator.ts` (new)
-**Impact:** Eliminate duplication, single source of truth
-**Tests:** Add `row-activator.test.ts`
+**Impact:** Eliminated code duplication - removed 120+ lines of duplicated code
+**Tests:** All 17 test files passing (19 tests)
 
 ### 1.3 Extract FilterEngine Module 📋
 **Status:** Pending
@@ -60,6 +60,13 @@
 - Result: ✅ All 17 test files passing
 - Tests: 19 total
 - Changes: Created logger utility, replaced all console.log statements
+
+### After 1.2 (RowActivator extraction)
+- Date: 2025-11-13
+- Result: ✅ All 17 test files passing
+- Tests: 19 total
+- Changes: Created RowActivator class, eliminated 120+ lines of duplicated code
+- protocol.ts: Removed duplicate activateRow/deactivateRow functions
 
 ---
 

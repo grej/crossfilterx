@@ -97,6 +97,7 @@ import {
 import { computeTopK } from './worker/top-k';
 import { ingestDataset, binsForSpec, type ColumnarPayload } from './worker/ingest-executor';
 import { createLogger } from './utils/logger';
+import { RowActivator, type RowActivatorState } from './engine/row-activator';
 
 const BUFFER_THRESHOLD_ROWS = 32_768;
 const BUFFER_THRESHOLD_WORK = 1_048_576; // rows * dims
@@ -384,10 +385,11 @@ function applyFilter(state: EngineState, dimId: number, range: { lo: number; hi:
     buildIndex(state, dimId, () => {});
   }
 
-  const { layout, columns, histograms, activeRows, indexes } = state;
+  const { layout, activeRows, indexes } = state;
   const requiredFilters = countActiveFilters(state.filters);
   const refcount = layout.refcount;
   const index = indexes[dimId];
+  const rowActivator = new RowActivator(state as unknown as RowActivatorState);
 
   if (diff.removed.length > 0) {
     for (const [lo, hi] of diff.removed) {
@@ -408,74 +410,10 @@ function applyFilter(state: EngineState, dimId: number, range: { lo: number; hi:
     const isActive = next >= requiredFilters;
 
     if (!wasActive && isActive) {
-      activateRow(row);
+      rowActivator.activate(row);
     } else if (wasActive && !isActive) {
-      deactivateRow(row);
+      rowActivator.deactivate(row);
     }
-  }
-
-  function activateRow(row: number) {
-    activeRows[row] = 1;
-    setMask(layout.activeMask, row, true);
-    const simd = state.histogramMode === 'simd' ? state.simd : null;
-    if (simd) {
-      simd.record(row, 1);
-    } else {
-      for (let dim = 0; dim < histograms.length; dim++) {
-        const bin = columns[dim][row];
-        histograms[dim].front[bin]++;
-        histograms[dim].back[bin]++;
-
-        // NEW: Incremental coarse update (near-zero cost)
-        const coarse = state.coarseHistograms[dim];
-        if (coarse) {
-          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
-          const coarseIdx = Math.floor(bin / factor);
-          coarse.front[coarseIdx]++;
-          coarse.back[coarseIdx]++;
-        }
-      }
-    }
-    // NEW: Update reductions incrementally
-    for (const [dimId, reduction] of state.reductions) {
-      const bin = columns[dimId][row];
-      const value = reduction.valueColumn[row];
-      reduction.sumBuffers.front[bin] += value;
-      reduction.sumBuffers.back[bin] += value;
-    }
-    state.activeCount++;
-  }
-
-  function deactivateRow(row: number) {
-    activeRows[row] = 0;
-    setMask(layout.activeMask, row, false);
-    const simd = state.histogramMode === 'simd' ? state.simd : null;
-    if (simd) {
-      simd.record(row, -1);
-    } else {
-      for (let dim = 0; dim < histograms.length; dim++) {
-        const bin = columns[dim][row];
-        histograms[dim].front[bin]--;
-        histograms[dim].back[bin]--;
-
-        // NEW: Incremental coarse update
-        const coarse = state.coarseHistograms[dim];
-        if (coarse) {
-          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
-          const coarseIdx = Math.floor(bin / factor);
-          coarse.front[coarseIdx]--;
-          coarse.back[coarseIdx]--;
-        }
-      }
-    }
-    // NEW: Update reductions incrementally
-    for (const [dimId, reduction] of state.reductions) {
-      const bin = columns[dimId][row];
-      const value = reduction.valueColumn[row];
-      reduction.sumBuffers.front[bin] -= value;
-      reduction.sumBuffers.back[bin] -= value;
-    }
-    state.activeCount--;
   }
 
   flushSimd(state);
@@ -490,11 +428,12 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
     buildIndex(state, dimId, () => {});
   }
 
-  const { columns, histograms, activeRows, indexes } = state;
+  const { activeRows, indexes, histograms } = state;
   const requiredFilters = countActiveFilters(state.filters);
   const refcount = layoutRef.refcount;
   const index = indexes[dimId];
   const bins = histograms[dimId].front.length;
+  const rowActivator = new RowActivator(state as unknown as RowActivatorState);
 
   const removeLo = Math.max(previous.lo, 0);
   const removeHi = Math.min(previous.hi, bins - 1);
@@ -629,82 +568,10 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
     const wasActive = activeRows[row] === 1;
     const isActive = next >= requiredFilters;
     if (!wasActive && isActive) {
-      activateRow(row, buffers);
+      rowActivator.activate(row, buffers);
     } else if (wasActive && !isActive) {
-      deactivateRow(row, buffers);
+      rowActivator.deactivate(row, buffers);
     }
-  }
-
-function activateRow(row: number, buffers?: HistogramBuffer[] | null) {
-    activeRows[row] = 1;
-    setMask(layoutRef.activeMask, row, true);
-    const simd = !buffers && state.histogramMode === 'simd' ? state.simd : null;
-    if (buffers) {
-      for (let dim = 0; dim < buffers.length; dim++) {
-        buffers[dim].inc(columns[dim][row]);
-      }
-    } else if (simd) {
-      simd.record(row, 1);
-    } else {
-      for (let dim = 0; dim < histograms.length; dim++) {
-        const bin = columns[dim][row];
-        histograms[dim].front[bin]++;
-        histograms[dim].back[bin]++;
-
-        // NEW: Incremental coarse update (near-zero cost)
-        const coarse = state.coarseHistograms[dim];
-        if (coarse) {
-          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
-          const coarseIdx = Math.floor(bin / factor);
-          coarse.front[coarseIdx]++;
-          coarse.back[coarseIdx]++;
-        }
-      }
-    }
-    // NEW: Update reductions incrementally
-    for (const [dimId, reduction] of state.reductions) {
-      const bin = columns[dimId][row];
-      const value = reduction.valueColumn[row];
-      reduction.sumBuffers.front[bin] += value;
-      reduction.sumBuffers.back[bin] += value;
-    }
-    state.activeCount++;
-  }
-
-function deactivateRow(row: number, buffers?: HistogramBuffer[] | null) {
-    activeRows[row] = 0;
-    setMask(layoutRef.activeMask, row, false);
-    const simd = !buffers && state.histogramMode === 'simd' ? state.simd : null;
-    if (buffers) {
-      for (let dim = 0; dim < buffers.length; dim++) {
-        buffers[dim].dec(columns[dim][row]);
-      }
-    } else if (simd) {
-      simd.record(row, -1);
-    } else {
-      for (let dim = 0; dim < histograms.length; dim++) {
-        const bin = columns[dim][row];
-        histograms[dim].front[bin]--;
-        histograms[dim].back[bin]--;
-
-        // NEW: Incremental coarse update
-        const coarse = state.coarseHistograms[dim];
-        if (coarse) {
-          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
-          const coarseIdx = Math.floor(bin / factor);
-          coarse.front[coarseIdx]--;
-          coarse.back[coarseIdx]--;
-        }
-      }
-    }
-    // NEW: Update reductions incrementally
-    for (const [dimId, reduction] of state.reductions) {
-      const bin = columns[dimId][row];
-      const value = reduction.valueColumn[row];
-      reduction.sumBuffers.front[bin] -= value;
-      reduction.sumBuffers.back[bin] -= value;
-    }
-    state.activeCount--;
   }
 }
 
