@@ -38,6 +38,7 @@ function requestWasmBindings(): void {
   if (wasmInitPromise) return;
   wasmInitPromise = (async () => {
     try {
+      // @ts-ignore - WASM module may not exist if not built
       const module: unknown = await import('./pkg/crossfilterx_kernels.js');
       const anyModule = module as Record<string, unknown>;
       const initialise = typeof anyModule.default === 'function' ? anyModule.default : null;

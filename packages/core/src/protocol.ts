@@ -423,6 +423,7 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
   const { layout } = state;
   if (!layout) return;
   const layoutRef = layout;
+  const logger = createLogger('Worker');
 
   if (!state.indexReady[dimId]) {
     buildIndex(state, dimId, () => {});
