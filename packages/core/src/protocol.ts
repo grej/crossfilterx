@@ -1,11 +1,103 @@
 /**
- * @fileoverview Defines the worker protocol for CrossfilterX, including message
- *   handling, ingest routines, and histogram update paths. The module depends on
- *   SharedArrayBuffer layout helpers from `memory/layout`, ingest utilities from
- *   `memory/ingest`, and CSR index builders from `indexers/csr`. It is consumed
- *   by the worker runtime bootstrapped through `packages/core/src/index.ts`, and
- *   the public API as well as the benchmark harness depend on the message
- *   handling exposed here.
+ * @fileoverview Protocol - Worker-side message handler and data processor
+ *
+ * This module implements the worker-thread side of CrossfilterX's architecture.
+ * It receives messages from the main thread (controller.ts), processes data,
+ * applies filters, and updates histograms using efficient delta algorithms.
+ *
+ * ## Architecture Role
+ *
+ * While controller.ts coordinates on the main thread, this module does the
+ * heavy lifting:
+ * - **Data ingestion**: Quantizes raw data into compact bit-packed columns
+ * - **Index building**: Constructs CSR (Compressed Sparse Row) indices for fast range queries
+ * - **Filter application**: Uses delta updates or full recompute based on cost model
+ * - **Histogram updates**: SIMD-accelerated histogram computation via RowActivator
+ * - **State management**: Tracks active rows, filter ranges, and histogram bins
+ *
+ * ## Message Protocol
+ *
+ * ### Messages TO Worker (from controller):
+ * - **INGEST**: Initial data load, creates dimensions and histograms
+ * - **BUILD_INDEX**: Constructs CSR index for a dimension (optional optimization)
+ * - **FILTER_SET**: Apply range filter to dimension (e.g., [100, 200])
+ * - **FILTER_CLEAR**: Remove filter from dimension
+ * - **ADD_DIMENSION**: Add new dimension after initial ingest
+ * - **GROUP_SET_REDUCTION**: Configure aggregation (e.g., sum of price column)
+ * - **GROUP_TOP_K**: Request top/bottom K values from a dimension
+ * - **ESTIMATE**: Estimate cost of applying a filter (for preview)
+ * - **REQUEST_PLANNER**: Get current ClearPlanner statistics
+ * - **SWAP**: Debug command to swap active buffers
+ *
+ * ### Messages FROM Worker (to controller):
+ * - **READY**: Worker initialized, data ingested, ready for commands
+ * - **INDEX_BUILT**: CSR index construction complete
+ * - **FRAME**: Filter operation complete, histograms updated
+ * - **DIMENSION_ADDED**: New dimension created successfully
+ * - **PLANNER**: ClearPlanner statistics snapshot
+ * - **TOP_K_RESULT**: Top/bottom K results
+ * - **PROGRESS**: Long-running operation progress update
+ *
+ * ## Filter Update Strategies
+ *
+ * When a filter changes (FILTER_SET or FILTER_CLEAR), the protocol chooses between:
+ *
+ * 1. **Delta Update** (incremental):
+ *    - Computes which rows changed status (became active/inactive)
+ *    - Updates only affected histogram bins
+ *    - Uses CSR index for efficient range queries
+ *    - Fast when filter changes are small
+ *
+ * 2. **Full Recompute**:
+ *    - Rebuilds all histograms from scratch
+ *    - Iterates over active rows only
+ *    - Uses RowActivator for SIMD acceleration
+ *    - Fast when active set is very small or filter changes are large
+ *
+ * The ClearPlanner maintains running cost estimates to choose the optimal strategy.
+ *
+ * ## Performance Optimizations
+ *
+ * - **SharedArrayBuffer**: Zero-copy histogram access from main thread
+ * - **CSR Indexing**: O(log n + k) range queries instead of O(n)
+ * - **Delta Updates**: Process only changed rows, not entire dataset
+ * - **SIMD Histograms**: Rust/WASM acceleration when available
+ * - **Bit Packing**: Quantized values stored compactly (4-16 bits per value)
+ * - **Adaptive Strategy**: Cost model learns from actual timings to optimize future operations
+ *
+ * ## Data Flow Example
+ *
+ * ```
+ * 1. INGEST message arrives
+ *    ↓
+ * 2. Quantize columns, allocate SharedArrayBuffer
+ *    ↓
+ * 3. Build initial histograms (all rows active)
+ *    ↓
+ * 4. Send READY with GroupSnapshots
+ *    ↓
+ * 5. FILTER_SET [100, 200] on dim 0
+ *    ↓
+ * 6. ClearPlanner chooses delta update
+ *    ↓
+ * 7. CSR index finds affected rows
+ *    ↓
+ * 8. Update histograms via diffRanges + RowActivator
+ *    ↓
+ * 9. Send FRAME with updated GroupSnapshots
+ * ```
+ *
+ * ## Key Algorithms
+ *
+ * - **diffRanges()**: Computes set difference between old/new filter ranges
+ * - **buildCsr()**: Two-pass CSR index construction
+ * - **fullRecompute()**: Rebuild all histograms from active rows
+ * - **diffUpdate()**: Incremental histogram updates via CSR deltas
+ *
+ * @see controller.ts for main-thread coordinator
+ * @see indexers/csr.ts for CSR index implementation
+ * @see worker/clear-planner.ts for adaptive strategy selection
+ * @see worker/row-activator.ts for SIMD histogram updates
  */
 
 export type MsgToWorker =

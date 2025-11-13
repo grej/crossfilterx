@@ -1,3 +1,55 @@
+/**
+ * @fileoverview WorkerController - Main thread coordinator for CrossfilterX
+ *
+ * This module implements the main-thread side of CrossfilterX's worker architecture.
+ * It manages communication with the Web Worker, tracks asynchronous state, and maintains
+ * local histogram caches for immediate reads.
+ *
+ * ## Architecture
+ *
+ * CrossfilterX uses a **two-thread architecture**:
+ * - **Main thread** (this file): Handles public API, manages worker communication,
+ *   caches histogram data for synchronous reads
+ * - **Worker thread** (protocol.ts): Processes data, applies filters, updates histograms
+ *
+ * ## Key Responsibilities
+ *
+ * 1. **Worker Lifecycle**: Creates, configures, and terminates the Web Worker
+ * 2. **Message Passing**: Sends commands (FILTER_SET, FILTER_CLEAR, etc.) and
+ *    receives results (FRAME, INDEX_READY, etc.)
+ * 3. **Promise Coordination**: Converts async worker operations into promises
+ *    that resolve when the worker completes
+ * 4. **State Synchronization**: Maintains local GroupState caches that mirror
+ *    worker-side histogram data via SharedArrayBuffer
+ * 5. **Derived Dimensions**: Processes function-based dimensions on main thread
+ *    (e.g., `dim((d) => d.computed)`) before sending to worker
+ *
+ * ## Data Flow
+ *
+ * ```
+ * User calls dim.filter([100, 200])
+ *        ↓
+ * WorkerController.filterRange()
+ *        ↓
+ * postMessage({ t: 'FILTER_SET', ... }) → Worker processes
+ *        ↓                                  ↓
+ * trackFrame() creates promise        Worker updates histograms
+ *        ↓                                  ↓
+ * Promise resolves when         ← postMessage({ t: 'FRAME', ... })
+ * FRAME message received
+ * ```
+ *
+ * ## Performance Considerations
+ *
+ * - **Zero-copy reads**: Histogram bins backed by SharedArrayBuffer, no serialization
+ * - **Async filtering**: Filter operations don't block main thread
+ * - **Batch updates**: Multiple filter changes can be batched via sequence numbers
+ * - **Function dimensions**: Processed on main thread, may block for large datasets
+ *   (see UI_BLOCKING_THRESHOLD)
+ *
+ * @see protocol.ts for worker-side message handling
+ * @see index.ts for public API that wraps this controller
+ */
 import type { CFOptions, ColumnarData, TypedArray, ProfileSnapshot } from './types';
 import { quantize, type QuantizeScale } from './memory/quantize';
 import { createProtocol, type DimSpec, type GroupSnapshot, type MsgFromWorker, type MsgToWorker } from './protocol';
