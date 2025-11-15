@@ -12,16 +12,3 @@
   [headers.values]
     Cross-Origin-Opener-Policy = "same-origin"
     Cross-Origin-Embedder-Policy = "require-corp"
-
-# Redirect root to GitHub
-[[redirects]]
-  from = "https://crossfilterx.netlify.app/"
-  to = "https://github.com/grej/crossfilterx"
-  status = 302
-  force = false
-
-# SPA fallback (if needed)
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
