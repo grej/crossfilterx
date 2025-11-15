@@ -1,4 +1,5 @@
 import { crossfilterX } from '@crossfilterx/core';
+import { drawHistogram, drawBars, downsample, valueToBin, type ChartBrush } from './charts';
 
 type Flight = {
   carrier: number;
@@ -15,6 +16,7 @@ const CARRIERS = ['AA', 'DL', 'UA', 'WN', 'B6', 'AS'];
 const ROW_COUNT = Number(import.meta.env?.VITE_ROWS ?? 200_000);
 const COLUMNAR_MODE = import.meta.env?.VITE_COLUMNAR === '1';
 const BINS = 1024;
+const BITS = 10; // log2(1024)
 
 const distanceScale: Scale = { min: 50, max: 3000 };
 const departureScale: Scale = { min: 0, max: 23 };
@@ -87,7 +89,11 @@ const canvases = {
   distance: app.querySelector<HTMLCanvasElement>('[data-chart="distance"]')!,
   carrier: app.querySelector<HTMLCanvasElement>('[data-chart="carrier"]')!,
 };
-const overrideColumnar = Boolean((window as Record<string, unknown>).VITE_COLUMNAR_OVERRIDE);
+
+// Brush state for interactive chart
+const distanceBrush: ChartBrush = { active: false, startX: 0, currentX: 0 };
+
+const overrideColumnar = Boolean((window as any).VITE_COLUMNAR_OVERRIDE);
 const columnarActive = COLUMNAR_MODE || overrideColumnar;
 const dataset = columnarActive ? generateFlightsColumnar(ROW_COUNT) : generateFlights(ROW_COUNT);
 const ingestStart = performance.now();
@@ -99,6 +105,10 @@ const departureGroup = cf.group('departure');
 
 await cf.whenIdle();
 const ingestDuration = performance.now() - ingestStart;
+
+// Setup interactive brushing on distance chart
+setupDistanceBrushing();
+
 render();
 
 sliders.min.addEventListener('input', () => updateDistanceFilter(true));
@@ -108,6 +118,9 @@ sliders.max.addEventListener('change', () => updateDistanceFilter(false));
 resetButton.addEventListener('click', () => {
   sliders.min.value = '0';
   sliders.max.value = '100';
+  distanceBrush.active = false;
+  distanceBrush.startX = 0;
+  distanceBrush.currentX = 0;
   distanceDim.clear();
   void cf.whenIdle().then(() => {
     const summaryLabel = document.querySelector<HTMLLabelElement>('label');
@@ -115,6 +128,84 @@ resetButton.addEventListener('click', () => {
     render();
   });
 });
+
+function setupDistanceBrushing() {
+  const canvas = canvases.distance;
+
+  canvas.addEventListener('mousedown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    distanceBrush.active = true;
+    distanceBrush.startX = e.clientX - rect.left;
+    distanceBrush.currentX = distanceBrush.startX;
+  });
+
+  canvas.addEventListener('mousemove', (e) => {
+    if (!distanceBrush.active) return;
+    const rect = canvas.getBoundingClientRect();
+    distanceBrush.currentX = e.clientX - rect.left;
+    render();
+  });
+
+  canvas.addEventListener('mouseup', async () => {
+    if (!distanceBrush.active) return;
+    distanceBrush.active = false;
+    await applyDistanceBrush();
+  });
+
+  canvas.addEventListener('mouseleave', async () => {
+    if (!distanceBrush.active) return;
+    distanceBrush.active = false;
+    await applyDistanceBrush();
+  });
+
+  // Double-click to reset
+  canvas.addEventListener('dblclick', async () => {
+    sliders.min.value = '0';
+    sliders.max.value = '100';
+    distanceBrush.active = false;
+    distanceBrush.startX = 0;
+    distanceBrush.currentX = 0;
+    distanceDim.clear();
+    await cf.whenIdle();
+    const summaryLabel = document.querySelector<HTMLLabelElement>('label');
+    if (summaryLabel) summaryLabel.textContent = 'Distance Range: 0 - 3,000 mi';
+    render();
+  });
+}
+
+async function applyDistanceBrush() {
+  const canvas = canvases.distance;
+  const x1 = Math.min(distanceBrush.startX, distanceBrush.currentX);
+  const x2 = Math.max(distanceBrush.startX, distanceBrush.currentX);
+
+  // Convert pixel coordinates to distance range
+  const width = canvas.width;
+  const minDist = distanceScale.min + (x1 / width) * (distanceScale.max - distanceScale.min);
+  const maxDist = distanceScale.min + (x2 / width) * (distanceScale.max - distanceScale.min);
+
+  // Convert to bins
+  const minBin = valueToBin(minDist, distanceScale, BITS);
+  const maxBin = valueToBin(maxDist, distanceScale, BITS);
+
+  // Update sliders to reflect brush selection
+  const minPct = ((minDist - distanceScale.min) / (distanceScale.max - distanceScale.min)) * 100;
+  const maxPct = ((maxDist - distanceScale.min) / (distanceScale.max - distanceScale.min)) * 100;
+  sliders.min.value = String(Math.round(minPct));
+  sliders.max.value = String(Math.round(maxPct));
+
+  // Update label
+  const label = document.querySelector<HTMLLabelElement>('label');
+  if (label) {
+    label.textContent = `Distance Range: ${formatNumber(Math.round(minDist))} - ${formatNumber(
+      Math.round(maxDist)
+    )} mi`;
+  }
+
+  // Apply filter
+  distanceDim.filter([minBin, maxBin]);
+  await cf.whenIdle();
+  render();
+}
 
 function updateDistanceFilter(isCoarse = false) {
   const minPct = Math.min(Number(sliders.min.value), Number(sliders.max.value));
@@ -131,14 +222,16 @@ function updateDistanceFilter(isCoarse = false) {
       rangeDisplay.max
     )} mi`;
   }
-  const lo = scalePercentToBin(minPct / 100, distanceScale, BINS);
-  const hi = scalePercentToBin(maxPct / 100, distanceScale, BINS);
+  const minValue = distanceScale.min + (minPct / 100) * (distanceScale.max - distanceScale.min);
+  const maxValue = distanceScale.min + (maxPct / 100) * (distanceScale.max - distanceScale.min);
+  const lo = valueToBin(minValue, distanceScale, BITS);
+  const hi = valueToBin(maxValue, distanceScale, BITS);
   distanceDim.filter([lo, hi]);
   void cf.whenIdle().then(() => render(isCoarse));
 }
 
 function render(isCoarse = false) {
-  const activeCount = sumBins(carrierGroup.bins());
+  const activeCount = sumBinsLocal(carrierGroup.bins());
   summaries.rows.textContent = formatNumber(ROW_COUNT);
   summaries.filter.textContent = `${formatNumber(activeCount)} (${((
     activeCount / ROW_COUNT
@@ -149,7 +242,8 @@ function render(isCoarse = false) {
 
   const distanceBins = isCoarse ? distanceGroup.coarse()?.bins() : distanceGroup.bins();
   if (distanceBins) {
-    drawHistogram(canvases.distance, downsample(distanceBins, 64), '#38bdf8');
+    // Use imported drawHistogram with brush support
+    drawHistogram(canvases.distance, downsample(distanceBins, 64), '#38bdf8', distanceBrush);
   }
   drawBars(canvases.carrier, extractCarriers(), '#f97316');
 }
@@ -211,66 +305,11 @@ function extractCarriers() {
   return result;
 }
 
-function drawHistogram(canvas: HTMLCanvasElement, data: number[], color: string) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  const { width, height } = canvas;
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = '#0f172a';
-  ctx.fillRect(0, 0, width, height);
-  const max = Math.max(...data, 1);
-  const barWidth = width / data.length;
-  ctx.fillStyle = color;
-  data.forEach((value, index) => {
-    const barHeight = (value / max) * (height - 12);
-    ctx.fillRect(index * barWidth, height - barHeight, barWidth - 1, barHeight);
-  });
-}
 
-function drawBars(canvas: HTMLCanvasElement, data: Array<{ label: string; value: number }>, color: string) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  const { width, height } = canvas;
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = '#0f172a';
-  ctx.fillRect(0, 0, width, height);
-  const max = Math.max(...data.map((d) => d.value), 1);
-  const barWidth = width / Math.max(data.length, 1);
-  ctx.fillStyle = color;
-  ctx.font = '12px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = color;
-  data.forEach((row, index) => {
-    const barHeight = (row.value / max) * (height - 24);
-    const x = index * barWidth;
-    ctx.globalAlpha = 0.9;
-    ctx.fillRect(x + 4, height - barHeight - 16, barWidth - 8, barHeight);
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = '#e2e8f0';
-    ctx.fillText(row.label, x + barWidth / 2, height - 4);
-    ctx.fillStyle = color;
-  });
-}
-
-function sumBins(bins: Uint32Array) {
+function sumBinsLocal(bins: Uint32Array) {
   let total = 0;
   for (let i = 0; i < bins.length; i++) total += bins[i];
   return total;
-}
-
-function downsample(bins: Uint32Array, target: number) {
-  const chunk = Math.max(1, Math.floor(bins.length / target));
-  const output = new Array(Math.ceil(bins.length / chunk)).fill(0);
-  for (let i = 0; i < bins.length; i++) {
-    const index = Math.floor(i / chunk);
-    output[index] += bins[i];
-  }
-  return output;
-}
-
-function scalePercentToBin(percent: number, scale: Scale, bits: number) {
-  const value = scale.min + percent * (scale.max - scale.min);
-  return quantizeValue(value, scale.min, scale.max, bits);
 }
 
 function mapBinToValue(bin: number, scale: Scale, bits: number) {
@@ -336,14 +375,6 @@ function randomNormal(mean: number, std: number) {
   return mean + std * num;
 }
 
-
-function quantizeValue(value: number, min: number, max: number, bits: number) {
-  if (max <= min) return 0;
-  const range = (1 << bits) - 1;
-  const clamped = Math.min(Math.max(value, min), max);
-  const normalized = (clamped - min) / (max - min);
-  return Math.round(normalized * range);
-}
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -356,9 +387,9 @@ modeToggle.textContent = `Switch to ${COLUMNAR_MODE ? 'row' : 'columnar'} mode`;
 modeToggle.className = 'mode-toggle';
 modeToggle.addEventListener('click', () => {
   if (COLUMNAR_MODE) {
-    delete (window as Record<string, unknown>).VITE_COLUMNAR_OVERRIDE;
+    delete (window as any).VITE_COLUMNAR_OVERRIDE;
   } else {
-    (window as Record<string, unknown>).VITE_COLUMNAR_OVERRIDE = true;
+    (window as any).VITE_COLUMNAR_OVERRIDE = true;
   }
   window.location.reload();
 });

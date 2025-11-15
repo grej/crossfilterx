@@ -168,14 +168,20 @@ Key differences:
 
 Check out the `/packages/demo` directory for working examples:
 
-- **Basic Demo** (`index.html`) - Simple 2-chart demo with distance filtering
-- **Enhanced Demo** (`enhanced.html`) - 4-chart coordinated views like official crossfilter
+- **Basic Demo** (`index.html`) - 2-chart demo with interactive brushing and distance filtering
+- **Enhanced Demo** (`enhanced.html`) - 4-chart coordinated views with interactive brushing like official crossfilter
 
-Run the demo:
+Run the demo locally:
 
 ```bash
 npm run dev
 open http://localhost:5173
+```
+
+**Note:** The demos use SharedArrayBuffer which requires specific CORS headers. The development server and Netlify deployment are pre-configured with the required headers. If deploying elsewhere, ensure your server sends:
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
 ```
 
 ## Development

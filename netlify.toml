@@ -1,0 +1,32 @@
+[build]
+  # Build from the demo package
+  base = "packages/demo"
+  publish = "dist"
+  command = "npm run build"
+
+[[headers]]
+  # Apply headers to all routes
+  for = "/*"
+  [headers.values]
+    # Required for SharedArrayBuffer support
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Embedder-Policy = "require-corp"
+    # Security headers
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[headers]]
+  # WASM files
+  for = "*.wasm"
+  [headers.values]
+    Content-Type = "application/wasm"
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Embedder-Policy = "require-corp"
+
+[[headers]]
+  # JavaScript files
+  for = "*.js"
+  [headers.values]
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Embedder-Policy = "require-corp"
