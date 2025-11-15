@@ -1,29 +1,52 @@
-# CrossfilterX Docs
+# CrossfilterX Live Demo
 
-Initial technical notes live in `AGENTS.md`. This README tracks navigation to the most relevant references and toggles for contributors.
+This directory contains the GitHub Pages / Netlify demo site for CrossfilterX.
 
-## Quick Links
-- [Hero Landing Page](site/index.html) — renders the latest numbers from `packages/bench/reports-summary.json`.
-- [Benchmark Report](../BENCHMARKS.md) — single-range, multi-range, and microbench results with ELI5 commentary.
-- [Roadmap (16 Sep)](../16sepnextsteps.md) — day-by-day plan with outstanding workstreams.
-- [Progress Log (17 Sep)](../PROGRESS_AND_NEXT_STEPS_17_SEP.md) — current status, scripts, and configuration cheat sheet.
+## ⚠️ Important: SharedArrayBuffer Requirements
 
-## Dataset Formats & Flags
-- **Row objects** (`Array<Record<string, unknown>>`): default for `npm run bench` and the legacy comparison script.
-- **Columnar datasets** (`ColumnarData`): enable via `BENCH_COLUMNAR=1` or `VITE_COLUMNAR=1`. Supply `categories` for dictionary-encoded dimensions when passing typed arrays.
-- **Histogram buffering**: opt in with `BENCH_HIST_MODE=buffered` or set `globalThis.__CFX_HIST_MODE = 'buffered'` in bespoke harnesses. Auto mode only buffers when ≥2 M rows toggle.
-- **SIMD staging**: `BENCH_HIST_MODE=simd` (or `__CFX_HIST_MODE='simd'`) uses the wasm-ready accumulator stub so you can validate wiring before the actual kernel lands.
-- **Building wasm kernels**: run `wasm-pack build packages/core/src/wasm/kernels --release --target web --out-dir packages/core/src/wasm/pkg` to regenerate the wasm bundle. The bench/micro scripts copy the output into `packages/core/dist/wasm/pkg` automatically before running.
-- **Function dimensions**: pass an accessor to `dimension(row => ...)`, `await` the returned handle, then call `dim.group()` as usual. Numeric results are quantized; string results build dictionary-backed columns behind the scenes.
-- **Profiling toggles**: `BENCH_PROFILE_CLEAR=1` (or `globalThis.__CFX_PROFILE_CLEAR = true`) records `profile.clear` snapshots for clears.
+CrossfilterX requires `SharedArrayBuffer`, which needs these HTTP headers:
 
-## Automation Cheatsheet
-- `npm run bench` — single-range scenario; respects the env vars above.
-- `npm run bench:micro` — builds both workspaces and executes the histogram microbench.
-- `node scripts/run-bench-suite.mjs` — orchestrates baselines, comparisons, 1 M suite, multi-filter stress tests, microbench, and summary regeneration.
-- `node scripts/compare-crossfilter.mjs [--columnar]` — compares CrossfilterX vs. the community crossfilter checkout (`../crossfilter-community`).
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
 
-## Demo Toggles
-- `npm run dev` starts the Vite demo server (COOP/COEP headers included).
-- Update dataset size with `VITE_ROWS`; switch ingest mode at runtime with `window.VITE_COLUMNAR_OVERRIDE = 'rows' | 'columnar'`.
-- The demo HUD reports ingest duration, active mode, and active row counts to help validate performance changes.
+### Deployment Options
+
+#### Option 1: Netlify (Recommended)
+
+Deploy to Netlify for automatic header support via `_headers` file.
+
+The `_headers` file in this directory will automatically configure the required headers.
+
+#### Option 2: Local Development
+
+Run locally with proper headers:
+
+```bash
+# From repository root
+npm run dev
+```
+
+#### Option 3: GitHub Pages (Limited)
+
+**Note:** GitHub Pages does **not** support custom headers, so SharedArrayBuffer won't work.
+The demo page will display an error message explaining this limitation.
+
+## Features
+
+The demo showcases:
+
+- **Multiple dataset sizes** (1K to 500K rows)
+- **Real-time filtering** with interactive sliders
+- **Performance metrics** (filter time, row counts)
+- **4 coordinated charts** showing different dimensions
+- **Responsive design** for mobile and desktop
+
+## Browser Support
+
+Requires browsers with SharedArrayBuffer support:
+- Chrome 92+
+- Firefox 79+
+- Safari 15.2+
+- Edge 92+

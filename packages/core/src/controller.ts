@@ -1,8 +1,61 @@
+/**
+ * @fileoverview WorkerController - Main thread coordinator for CrossfilterX
+ *
+ * This module implements the main-thread side of CrossfilterX's worker architecture.
+ * It manages communication with the Web Worker, tracks asynchronous state, and maintains
+ * local histogram caches for immediate reads.
+ *
+ * ## Architecture
+ *
+ * CrossfilterX uses a **two-thread architecture**:
+ * - **Main thread** (this file): Handles public API, manages worker communication,
+ *   caches histogram data for synchronous reads
+ * - **Worker thread** (protocol.ts): Processes data, applies filters, updates histograms
+ *
+ * ## Key Responsibilities
+ *
+ * 1. **Worker Lifecycle**: Creates, configures, and terminates the Web Worker
+ * 2. **Message Passing**: Sends commands (FILTER_SET, FILTER_CLEAR, etc.) and
+ *    receives results (FRAME, INDEX_READY, etc.)
+ * 3. **Promise Coordination**: Converts async worker operations into promises
+ *    that resolve when the worker completes
+ * 4. **State Synchronization**: Maintains local GroupState caches that mirror
+ *    worker-side histogram data via SharedArrayBuffer
+ * 5. **Derived Dimensions**: Processes function-based dimensions on main thread
+ *    (e.g., `dim((d) => d.computed)`) before sending to worker
+ *
+ * ## Data Flow
+ *
+ * ```
+ * User calls dim.filter([100, 200])
+ *        ↓
+ * WorkerController.filterRange()
+ *        ↓
+ * postMessage({ t: 'FILTER_SET', ... }) → Worker processes
+ *        ↓                                  ↓
+ * trackFrame() creates promise        Worker updates histograms
+ *        ↓                                  ↓
+ * Promise resolves when         ← postMessage({ t: 'FRAME', ... })
+ * FRAME message received
+ * ```
+ *
+ * ## Performance Considerations
+ *
+ * - **Zero-copy reads**: Histogram bins backed by SharedArrayBuffer, no serialization
+ * - **Async filtering**: Filter operations don't block main thread
+ * - **Batch updates**: Multiple filter changes can be batched via sequence numbers
+ * - **Function dimensions**: Processed on main thread, may block for large datasets
+ *   (see UI_BLOCKING_THRESHOLD)
+ *
+ * @see protocol.ts for worker-side message handling
+ * @see index.ts for public API that wraps this controller
+ */
 import type { CFOptions, ColumnarData, TypedArray, ProfileSnapshot } from './types';
 import { quantize, type QuantizeScale } from './memory/quantize';
 import { createProtocol, type DimSpec, type GroupSnapshot, type MsgFromWorker, type MsgToWorker } from './protocol';
 import type { ColumnarPayload } from './worker/ingest-executor';
 import type { ClearPlannerSnapshot } from './worker/clear-planner';
+import { createLogger } from './utils/logger';
 
 export type DimensionSpec = DimSpec;
 
@@ -29,13 +82,84 @@ export type IngestSource =
   | { kind: 'rows'; data: Record<string, unknown>[] }
   | { kind: 'columnar'; data: ColumnarData };
 
+/**
+ * Default histogram resolution in bits.
+ *
+ * 12 bits = 4096 bins, providing good balance between:
+ * - Memory usage: 4096 bins × 4 bytes = 16KB per dimension
+ * - Precision: 0.024% resolution for continuous data
+ * - Performance: Reasonable computation time for most datasets
+ *
+ * Users can override this via the `bins` option in crossfilterX().
+ */
+const DEFAULT_BITS = 12;
+
+/**
+ * Maximum histogram resolution in bits.
+ *
+ * 16 bits = 65536 bins is the hard limit because:
+ * - Histogram bins are stored as Uint16Array indices
+ * - Beyond 16 bits, memory usage becomes prohibitive (256KB+ per dimension)
+ * - Diminishing returns: most visualizations don't benefit from >16-bit precision
+ */
+const MAX_BITS = 16;
+
+/**
+ * Row count threshold that triggers UI blocking warning.
+ *
+ * Function-based dimensions (e.g., `dim((d) => d.computed)`) must process
+ * every row on the main thread to extract values. Beyond 250K rows, this
+ * can cause noticeable UI lag.
+ *
+ * Users should pre-compute these columns and include them in the dataset
+ * rather than using function accessors for large datasets.
+ */
+const UI_BLOCKING_THRESHOLD = 250_000;
+
+/**
+ * Maximum unique categories for function-based dimensions.
+ *
+ * Category codes are stored as Uint16Array, limiting us to 65535 (0xFFFF)
+ * unique values. This is typically sufficient for categorical data like:
+ * - Countries, states, cities
+ * - Product categories, SKUs
+ * - User segments, tags
+ *
+ * If you need more categories, restructure as a numeric dimension or use hashing.
+ */
+const MAX_CATEGORIES = 0xffff;
+
 export class WorkerController {
+  /**
+   * Registry for automatic cleanup of workers when instances are garbage collected.
+   * Prevents memory leaks by ensuring workers are terminated even if dispose() isn't called.
+   */
+  private static readonly cleanup = new FinalizationRegistry<WorkerBridge>((worker) => {
+    worker.terminate();
+  });
+
+  /**
+   * Tracks the number of active CrossfilterX instances for memory leak warnings.
+   * Incremented in constructor, decremented in dispose().
+   */
+  private static instanceCount = 0;
+
+  /**
+   * Maximum number of concurrent instances before warning the user.
+   * Can be overridden via CFX_MAX_INSTANCES environment variable.
+   */
+  private static readonly MAX_INSTANCES = typeof process !== 'undefined' && process.env?.CFX_MAX_INSTANCES
+    ? parseInt(process.env.CFX_MAX_INSTANCES, 10)
+    : 5;
+
+  private readonly logger = createLogger('Controller');
   private readonly worker: WorkerBridge;
   private readonly plannerSnapshotFn: () => ClearPlannerSnapshot;
   private readonly dimsByName = new Map<string, number>();
   private readonly groupState = new Map<number, GroupState>();
   private readonly indexInfo = new Map<number, { ready: boolean; ms?: number; bytes?: number }>();
   private readonly indexResolvers = new Map<number, FrameResolver[]>();
+  private readonly indexTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
   private readonly frameResolvers: FrameResolver[] = [];
   private readonly idleResolvers: FrameResolver[] = [];
   private readonly readyPromise: Promise<void>;
@@ -48,7 +172,6 @@ export class WorkerController {
   private readonly source: IngestSource;
   private readonly options: CFOptions;
   private readonly schema: DimensionSpec[];
-  private functionCounter = 0;
   private readonly pendingDimensionResolvers = new Map<string, (dimId: number, snapshot: GroupSnapshot) => void>();
   private readonly topKResolvers = new Map<number, (results: Array<{ key: string | number; value: number }>) => void>();
   private readonly filterState = new Map<number, [number, number]>();
@@ -64,6 +187,21 @@ export class WorkerController {
     this.worker.onmessage = (event) => {
       this.handleMessage(event.data as MsgFromWorker);
     };
+
+    // Track instance for memory leak detection
+    WorkerController.instanceCount++;
+
+    // Register for automatic cleanup when garbage collected
+    WorkerController.cleanup.register(this, this.worker, this);
+
+    // Warn if too many instances are active
+    if (WorkerController.instanceCount >= WorkerController.MAX_INSTANCES) {
+      console.warn(
+        `[CrossfilterX] ${WorkerController.instanceCount} active instances detected. ` +
+        `Call dispose() on unused instances to prevent memory leaks. ` +
+        `See: https://github.com/grej/crossfilterx#memory-management`
+      );
+    }
 
     this.readyPromise = new Promise((resolve) => {
       this.resolveReady = resolve;
@@ -84,18 +222,18 @@ export class WorkerController {
   }
 
   filterRange(dimId: number, range: [number, number]) {
-    console.log(`[Controller] filterRange CALLED: dimId=${dimId}, range=[${range}], readyResolved=${this.readyResolved}`);
-    const [lo, hi] = range;
+    this.logger.log(`filterRange CALLED: dimId=${dimId}, range=[${range}], readyResolved=${this.readyResolved}`);
+    const [rangeMin, rangeMax] = range;
     this.filterState.set(dimId, range);
 
     // If ready, call trackFrame synchronously (before any async)
     if (this.readyResolved) {
-      console.log(`[Controller] filterRange CALLING trackFrame SYNCHRONOUSLY`);
+      this.logger.log(`filterRange CALLING trackFrame SYNCHRONOUSLY`);
       return this.trackFrame({
         t: 'FILTER_SET',
         dimId,
-        lo,
-        hi,
+        rangeMin,
+        rangeMax,
         seq: this.nextSeq()
       });
     }
@@ -105,8 +243,8 @@ export class WorkerController {
       return this.trackFrame({
         t: 'FILTER_SET',
         dimId,
-        lo,
-        hi,
+        rangeMin,
+        rangeMax,
         seq: this.nextSeq()
       });
     });
@@ -135,21 +273,49 @@ export class WorkerController {
   }
 
   whenIdle() {
-    console.log(`[Controller] whenIdle CALLED: pendingFrames=${this.pendingFrames}`);
+    this.logger.log(`whenIdle CALLED: pendingFrames=${this.pendingFrames}`);
     if (this.pendingFrames === 0) {
-      console.log(`[Controller] whenIdle RESOLVING IMMEDIATELY`);
+      this.logger.log(`whenIdle RESOLVING IMMEDIATELY`);
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
       this.idleResolvers.push(resolve);
-      console.log(`[Controller] whenIdle WAITING (${this.idleResolvers.length} resolvers queued)`);
+      this.logger.log(`whenIdle WAITING (${this.idleResolvers.length} resolvers queued)`);
     });
   }
 
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+
+    // Decrement instance count
+    WorkerController.instanceCount--;
+
+    // Unregister from automatic cleanup (we're cleaning up manually)
+    WorkerController.cleanup.unregister(this);
+
+    // CRITICAL: Clear message handler BEFORE terminating to release closure
+    // The onmessage closure captures 'this', preventing GC if worker object is retained
+    this.worker.onmessage = null;
+
+    // Terminate worker
     this.worker.terminate();
+
+    // CRITICAL: Clear all references to SharedArrayBuffers to allow GC
+    // Without this, TypedArray views keep SharedArrayBuffers alive
+    this.groupState.clear();
+    this.dimsByName.clear();
+    this.indexInfo.clear();
+    this.indexResolvers.clear();
+
+    // Clear all pending index build timeouts
+    this.indexTimeouts.forEach((timeout) => clearTimeout(timeout));
+    this.indexTimeouts.clear();
+
+    this.filterState.clear();
+    this.topKResolvers.clear();
+    this.pendingDimensionResolvers.clear();
+
     if (!this.readyResolved) {
       this.resolveReady();
       this.readyResolved = true;
@@ -199,16 +365,63 @@ export class WorkerController {
   async buildIndex(dimId: number) {
     await this.readyPromise;
     if (this.indexInfo.get(dimId)?.ready) return Promise.resolve();
-    return new Promise<void>((resolve) => {
+
+    return new Promise<void>((resolve, reject) => {
       const resolvers = this.indexResolvers.get(dimId) ?? [];
       resolvers.push(resolve);
       this.indexResolvers.set(dimId, resolvers);
+
+      // Safety timeout: index building can be slow for large datasets
+      // 60 seconds should be sufficient even for 1M+ rows
+      const timeout = setTimeout(() => {
+        const arr = this.indexResolvers.get(dimId);
+        if (arr) {
+          const idx = arr.indexOf(resolve);
+          if (idx !== -1) {
+            arr.splice(idx, 1);
+            if (arr.length === 0) {
+              this.indexResolvers.delete(dimId);
+            }
+            this.indexTimeouts.delete(dimId);
+            reject(new Error(
+              `Index build timeout for dimension ${dimId} after 60 seconds. ` +
+              `This may indicate a hung worker or extremely large dataset. ` +
+              `Consider pre-building indices or using smaller datasets.`
+            ));
+          }
+        }
+      }, 60000);
+
+      // Store timeout for cleanup on dispose
+      this.indexTimeouts.set(dimId, timeout);
+
+      // Clear timeout when index is built
+      const originalResolve = resolve;
+      const wrappedResolve = () => {
+        const t = this.indexTimeouts.get(dimId);
+        if (t) {
+          clearTimeout(t);
+          this.indexTimeouts.delete(dimId);
+        }
+        originalResolve();
+      };
+
+      // Replace the resolver in the array with the wrapped version
+      const idx = resolvers.indexOf(resolve);
+      if (idx !== -1) {
+        resolvers[idx] = wrappedResolve;
+      }
+
       this.worker.postMessage({ t: 'BUILD_INDEX', dimId });
     });
   }
 
   async setReduction(dimId: number, reduction: 'sum', valueColumn: string) {
     await this.readyPromise;
+    // Check if disposed after await (async operation could have been interrupted)
+    if (this.disposed) {
+      return Promise.resolve();
+    }
     return this.trackFrame({
       t: 'GROUP_SET_REDUCTION',
       dimId,
@@ -220,10 +433,22 @@ export class WorkerController {
 
   async getTopK(dimId: number, k: number, isBottom: boolean): Promise<Array<{ key: string | number; value: number }>> {
     await this.readyPromise;
+    // Check if disposed after await (async operation could have been interrupted)
+    if (this.disposed) {
+      return Promise.resolve([]);
+    }
+
     const seq = this.nextSeq();
     const promise = new Promise<Array<{ key: string | number; value: number }>>((resolve) => {
       this.topKResolvers.set(seq, resolve);
     });
+
+    // Check again before posting message to avoid race where dispose() happens between set and postMessage
+    if (this.disposed) {
+      this.topKResolvers.delete(seq);
+      return Promise.resolve([]);
+    }
+
     this.worker.postMessage({
       t: 'GROUP_TOP_K',
       dimId,
@@ -234,36 +459,6 @@ export class WorkerController {
     return promise;
   }
 
-  createFunctionDimension(accessor: (row: Record<string, unknown>) => unknown): Promise<number> {
-    const name = this.generateFunctionName(accessor.name || 'dimension');
-    const derived = this.buildDerivedColumn(name, accessor);
-    const dimId = this.schema.length;
-    this.schema.push({ name, type: derived.kind, bits: derived.bits });
-
-    const resolver = new Promise<number>((resolve) => {
-      this.pendingDimensionResolvers.set(name, (id, snapshot) => {
-        this.dimsByName.set(name, id);
-        this.groupState.set(id, snapshotToGroupState(snapshot));
-        this.indexInfo.set(id, { ready: false });
-        resolve(id);
-      });
-    });
-
-    const columnBuffer = derived.column.buffer.slice(0);
-    this.worker.postMessage({
-      t: 'ADD_DIMENSION',
-      name,
-      kind: derived.kind,
-      bits: derived.bits,
-      column: columnBuffer,
-      scale: derived.kind === 'number' ? derived.scale : null,
-      labels: derived.kind === 'string' ? derived.labels : null,
-      fallback: derived.kind === 'string' ? derived.fallback : 0
-    });
-
-    return resolver;
-  }
-
   private nextSeq() {
     return ++this.seq;
   }
@@ -272,7 +467,7 @@ export class WorkerController {
     if (this.disposed) {
       return Promise.resolve();
     }
-    console.log(`[Controller] trackFrame INCREMENTING pendingFrames from ${this.pendingFrames} to ${this.pendingFrames + 1}`);
+    this.logger.log(`trackFrame INCREMENTING pendingFrames from ${this.pendingFrames} to ${this.pendingFrames + 1}`);
     this.pendingFrames++;
     const completion = new Promise<void>((resolve) => {
       this.frameResolvers.push(resolve);
@@ -320,7 +515,21 @@ export class WorkerController {
         break;
       case 'ERROR':
         console.error('[crossfilterx] worker error:', message.message);
-        this.resolveFrame();
+        // CRITICAL: Flush ALL pending resolvers and reset state
+        // Without this, accumulated promise resolvers leak memory and pendingFrames desynchronizes
+        this.pendingFrames = 0;
+        this.flushFrames();
+        this.flushIdle();
+
+        // Reject all pending topK queries
+        this.topKResolvers.forEach((resolve, seq) => {
+          // Can't reject since we only have resolve, so just resolve with empty array
+          resolve([]);
+        });
+        this.topKResolvers.clear();
+
+        // Clear pending dimension resolvers (can't reject, just drop them)
+        this.pendingDimensionResolvers.clear();
         break;
       default: {
         const neverMessage: never = message;
@@ -348,7 +557,7 @@ export class WorkerController {
       const sum = Array.from(arr).reduce((a, b) => a + b, 0);
       return `[dim${g.id}:${sum}]`;
     }).join(' ');
-    console.log(`[Controller] applyFrame sums=${debugSums}`);
+    this.logger.log(`applyFrame sums=${debugSums}`);
 
     for (const snapshot of groups) {
       const state = this.groupState.get(snapshot.id);
@@ -359,7 +568,7 @@ export class WorkerController {
       const stateBinsSum = Array.from(state.bins).reduce((a, b) => a + b, 0);
       const incomingSum = Array.from(incoming).reduce((a, b) => a + b, 0);
       const bufferInfo = `state buffer ${state.bins.buffer.byteLength}@${state.bins.byteOffset}, incoming buffer ${incoming.buffer.byteLength}@${incoming.byteOffset}`;
-      console.log(`[Controller] dim${snapshot.id}: state.bins sum=${stateBinsSum}, incoming sum=${incomingSum}, same buffer? ${state.bins.buffer === incoming.buffer}, ${bufferInfo}`);
+      this.logger.log(`dim${snapshot.id}: state.bins sum=${stateBinsSum}, incoming sum=${incomingSum}, same buffer? ${state.bins.buffer === incoming.buffer}, ${bufferInfo}`);
 
       // ALWAYS update the bins reference to ensure we have the latest data
       // Even if it's the same SharedArrayBuffer, we want to ensure the view is correct
@@ -384,7 +593,13 @@ export class WorkerController {
       }
 
       if (snapshot.sum) {
-        state.sum = new Float64Array(snapshot.sum);
+        // Create view into SharedArrayBuffer instead of copying
+        // This prevents allocation on every frame update
+        state.sum = new Float64Array(
+          snapshot.sum,
+          0,
+          state.bins.length
+        );
       }
     }
   }
@@ -401,7 +616,7 @@ export class WorkerController {
   }
 
   private flushIdle() {
-    console.log(`[Controller] flushIdle: resolving ${this.idleResolvers.length} idle resolvers`);
+    this.logger.log(`flushIdle: resolving ${this.idleResolvers.length} idle resolvers`);
     while (this.idleResolvers.length) {
       this.idleResolvers.shift()?.();
     }
@@ -411,16 +626,6 @@ export class WorkerController {
     while (this.frameResolvers.length) {
       this.frameResolvers.shift()?.();
     }
-  }
-
-  private generateFunctionName(base: string) {
-    const sanitized = base.replace(/\s+/g, '_').replace(/[^A-Za-z0-9_]/g, '').toLowerCase();
-    let candidate = sanitized ? `fn_${sanitized}` : `fn_${this.functionCounter}`;
-    while (this.dimsByName.has(candidate)) {
-      candidate = `${candidate}_${++this.functionCounter}`;
-    }
-    this.functionCounter++;
-    return candidate;
   }
 
   private getRowCount() {
@@ -434,119 +639,9 @@ export class WorkerController {
 
   private resolveBitsLocal() {
     const bins = this.options.bins;
-    if (!bins) return 12;
+    if (!bins) return DEFAULT_BITS;
     const bits = Math.ceil(Math.log2(bins));
-    return Math.max(1, Math.min(16, bits));
-  }
-
-  private buildDerivedColumn(name: string, accessor: (row: Record<string, unknown>) => unknown) {
-    const rowCount = this.getRowCount();
-    if (rowCount > 250_000) {
-      console.warn(
-        `[CrossfilterX] Creating function dimension on ${rowCount} rows. ` +
-          `This may block the UI thread. Consider pre-computing this dimension.`
-      );
-    }
-    const values = new Array<unknown>(rowCount);
-    this.forEachRow((row, index) => {
-      values[index] = accessor(row);
-    });
-
-    let sample = values.find((value) => value !== undefined && value !== null);
-    if (sample instanceof Date) {
-      sample = sample.valueOf();
-    }
-
-    if (typeof sample === 'number') {
-      return this.buildNumericColumn(values);
-    }
-
-    return this.buildStringColumn(values);
-  }
-
-  private buildNumericColumn(values: Array<unknown>) {
-    const rowCount = this.getRowCount();
-    const numbers = new Array<number>(rowCount);
-    let min = Number.POSITIVE_INFINITY;
-    let max = Number.NEGATIVE_INFINITY;
-    for (let index = 0; index < rowCount; index++) {
-      const numeric = Number(values[index]);
-      numbers[index] = numeric;
-      if (Number.isFinite(numeric)) {
-        if (numeric < min) min = numeric;
-        if (numeric > max) max = numeric;
-      }
-    }
-    if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) {
-      min = Number.isFinite(min) ? min : 0;
-      max = min + 1;
-    }
-    const bits = this.resolveBitsLocal();
-    const range = (1 << bits) - 1;
-    const span = max - min;
-    const invSpan = span > 0 && Number.isFinite(span) ? range / span : 0;
-    const scale: QuantizeScale = { min, max, bits, range, invSpan };
-    const column = new Uint16Array(rowCount);
-    for (let index = 0; index < rowCount; index++) {
-      const numeric = numbers[index];
-      column[index] = Number.isFinite(numeric) ? quantize(numeric, scale) : 0;
-    }
-    return { kind: 'number' as const, bits, column, scale };
-  }
-
-  private buildStringColumn(values: Array<unknown>) {
-    const rowCount = this.getRowCount();
-    const dictionary = new Map<string, number>();
-    const labels: string[] = [];
-    const column = new Uint16Array(rowCount);
-    for (let index = 0; index < rowCount; index++) {
-      const key = values[index] === undefined || values[index] === null ? '' : String(values[index]);
-      let code = dictionary.get(key);
-      if (code === undefined) {
-        code = labels.length;
-        if (code > 0xffff) {
-          throw new Error('Function-based dimension exceeded 65535 unique categories.');
-        }
-        dictionary.set(key, code);
-        labels.push(key);
-      }
-      column[index] = code;
-    }
-    const bits = Math.max(1, Math.ceil(Math.log2(Math.max(1, labels.length))));
-    const fallback = dictionary.get('') ?? 0;
-    return { kind: 'string' as const, bits, column, labels, fallback };
-  }
-
-  private forEachRow(callback: (row: Record<string, unknown>, index: number) => void) {
-    if (this.source.kind === 'rows') {
-      this.source.data.forEach((row, index) => callback(row, index));
-      return;
-    }
-    const { columns, categories } = this.source.data;
-    const names = Object.keys(columns);
-    const columnData = names.map((name) => ({
-      data: columns[name] as ArrayLike<number>,
-      labels: categories?.[name]
-    }));
-    const rowCount = this.getRowCount();
-    let currentIndex = 0;
-    const view: Record<string, unknown> = {};
-    columnData.forEach(({ data, labels }, idx) => {
-      Object.defineProperty(view, names[idx], {
-        enumerable: true,
-        get: () => {
-          const raw = data[currentIndex];
-          if (labels) {
-            const code = typeof raw === 'number' ? raw : Number(raw);
-            return labels[code] ?? labels[0] ?? '';
-          }
-          return raw;
-        }
-      });
-    });
-    for (currentIndex = 0; currentIndex < rowCount; currentIndex++) {
-      callback(view, currentIndex);
-    }
+    return Math.max(1, Math.min(MAX_BITS, bits));
   }
 
   private markIndexBuilt(dimId: number, ms: number, bytes: number) {
@@ -592,7 +687,7 @@ function ensureTypedArray(array: TypedArray): TypedArray {
 }
 
 function createGroupState(bits: number): GroupState {
-  const binCount = Math.max(1, 1 << Math.min(bits, 16));
+  const binCount = Math.max(1, 1 << Math.min(bits, MAX_BITS));
   const bins = new Uint32Array(binCount);
   const keys = createKeys(binCount);
   return { bins, keys, count: 0 };
@@ -611,17 +706,36 @@ function snapshotToGroupState(snapshot: GroupSnapshot): GroupState {
   }
 
   if (snapshot.sum) {
-    state.sum = new Float64Array(snapshot.sum);
+    // CRITICAL: Create view into SharedArrayBuffer instead of copying
+    // This prevents massive memory allocation on every instance creation
+    // Copying would allocate bins.length * 8 bytes per instance (e.g., 32KB for 4096 bins)
+    state.sum = new Float64Array(
+      snapshot.sum,
+      0,
+      snapshot.binCount
+    );
   }
 
   return state;
 }
 
+// Cache for common key array sizes to avoid repeated allocation
+// Keys are just sequential indices [0, 1, 2, ..., n-1]
+const KEYS_CACHE = new Map<number, Uint16Array | Float32Array>();
+
 function createKeys(length: number): Uint16Array | Float32Array {
+  // Check cache first for common sizes
+  const cached = KEYS_CACHE.get(length);
+  if (cached) return cached;
+
   if (length <= 0xffff) {
     const keys = new Uint16Array(length);
     for (let i = 0; i < length; i++) {
       keys[i] = i;
+    }
+    // Cache common power-of-2 sizes (256, 1024, 4096, 16384, 65536)
+    if (length === 256 || length === 1024 || length === 4096 || length === 16384 || length === 65536) {
+      KEYS_CACHE.set(length, keys);
     }
     return keys;
   }

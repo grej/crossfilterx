@@ -1,19 +1,111 @@
 /**
- * @fileoverview Defines the worker protocol for CrossfilterX, including message
- *   handling, ingest routines, and histogram update paths. The module depends on
- *   SharedArrayBuffer layout helpers from `memory/layout`, ingest utilities from
- *   `memory/ingest`, and CSR index builders from `indexers/csr`. It is consumed
- *   by the worker runtime bootstrapped through `packages/core/src/index.ts`, and
- *   the public API as well as the benchmark harness depend on the message
- *   handling exposed here.
+ * @fileoverview Protocol - Worker-side message handler and data processor
+ *
+ * This module implements the worker-thread side of CrossfilterX's architecture.
+ * It receives messages from the main thread (controller.ts), processes data,
+ * applies filters, and updates histograms using efficient delta algorithms.
+ *
+ * ## Architecture Role
+ *
+ * While controller.ts coordinates on the main thread, this module does the
+ * heavy lifting:
+ * - **Data ingestion**: Quantizes raw data into compact bit-packed columns
+ * - **Index building**: Constructs CSR (Compressed Sparse Row) indices for fast range queries
+ * - **Filter application**: Uses delta updates or full recompute based on cost model
+ * - **Histogram updates**: SIMD-accelerated histogram computation via RowActivator
+ * - **State management**: Tracks active rows, filter ranges, and histogram bins
+ *
+ * ## Message Protocol
+ *
+ * ### Messages TO Worker (from controller):
+ * - **INGEST**: Initial data load, creates dimensions and histograms
+ * - **BUILD_INDEX**: Constructs CSR index for a dimension (optional optimization)
+ * - **FILTER_SET**: Apply range filter to dimension (e.g., [100, 200])
+ * - **FILTER_CLEAR**: Remove filter from dimension
+ * - **ADD_DIMENSION**: Add new dimension after initial ingest
+ * - **GROUP_SET_REDUCTION**: Configure aggregation (e.g., sum of price column)
+ * - **GROUP_TOP_K**: Request top/bottom K values from a dimension
+ * - **ESTIMATE**: Estimate cost of applying a filter (for preview)
+ * - **REQUEST_PLANNER**: Get current ClearPlanner statistics
+ * - **SWAP**: Debug command to swap active buffers
+ *
+ * ### Messages FROM Worker (to controller):
+ * - **READY**: Worker initialized, data ingested, ready for commands
+ * - **INDEX_BUILT**: CSR index construction complete
+ * - **FRAME**: Filter operation complete, histograms updated
+ * - **DIMENSION_ADDED**: New dimension created successfully
+ * - **PLANNER**: ClearPlanner statistics snapshot
+ * - **TOP_K_RESULT**: Top/bottom K results
+ * - **PROGRESS**: Long-running operation progress update
+ *
+ * ## Filter Update Strategies
+ *
+ * When a filter changes (FILTER_SET or FILTER_CLEAR), the protocol chooses between:
+ *
+ * 1. **Delta Update** (incremental):
+ *    - Computes which rows changed status (became active/inactive)
+ *    - Updates only affected histogram bins
+ *    - Uses CSR index for efficient range queries
+ *    - Fast when filter changes are small
+ *
+ * 2. **Full Recompute**:
+ *    - Rebuilds all histograms from scratch
+ *    - Iterates over active rows only
+ *    - Uses RowActivator for SIMD acceleration
+ *    - Fast when active set is very small or filter changes are large
+ *
+ * The ClearPlanner maintains running cost estimates to choose the optimal strategy.
+ *
+ * ## Performance Optimizations
+ *
+ * - **SharedArrayBuffer**: Zero-copy histogram access from main thread
+ * - **CSR Indexing**: O(log n + k) range queries instead of O(n)
+ * - **Delta Updates**: Process only changed rows, not entire dataset
+ * - **SIMD Histograms**: Rust/WASM acceleration when available
+ * - **Bit Packing**: Quantized values stored compactly (4-16 bits per value)
+ * - **Adaptive Strategy**: Cost model learns from actual timings to optimize future operations
+ *
+ * ## Data Flow Example
+ *
+ * ```
+ * 1. INGEST message arrives
+ *    ↓
+ * 2. Quantize columns, allocate SharedArrayBuffer
+ *    ↓
+ * 3. Build initial histograms (all rows active)
+ *    ↓
+ * 4. Send READY with GroupSnapshots
+ *    ↓
+ * 5. FILTER_SET [100, 200] on dim 0
+ *    ↓
+ * 6. ClearPlanner chooses delta update
+ *    ↓
+ * 7. CSR index finds affected rows
+ *    ↓
+ * 8. Update histograms via diffRanges + RowActivator
+ *    ↓
+ * 9. Send FRAME with updated GroupSnapshots
+ * ```
+ *
+ * ## Key Algorithms
+ *
+ * - **diffRanges()**: Computes set difference between old/new filter ranges
+ * - **buildCsr()**: Two-pass CSR index construction
+ * - **fullRecompute()**: Rebuild all histograms from active rows
+ * - **diffUpdate()**: Incremental histogram updates via CSR deltas
+ *
+ * @see controller.ts for main-thread coordinator
+ * @see indexers/csr.ts for CSR index implementation
+ * @see worker/clear-planner.ts for adaptive strategy selection
+ * @see worker/row-activator.ts for SIMD histogram updates
  */
 
 export type MsgToWorker =
   | { t: 'INGEST'; schema: DimSpec[]; rows: ArrayBuffer | unknown[] | ColumnarPayload; valueColumnNames?: string[] }
   | { t: 'BUILD_INDEX'; dimId: number }
-  | { t: 'FILTER_SET'; dimId: number; lo: number; hi: number; seq: number }
+  | { t: 'FILTER_SET'; dimId: number; rangeMin: number; rangeMax: number; seq: number }
   | { t: 'FILTER_CLEAR'; dimId: number; seq: number }
-  | { t: 'ESTIMATE'; dimId: number; lo: number; hi: number }
+  | { t: 'ESTIMATE'; dimId: number; rangeMin: number; rangeMax: number }
   | { t: 'SWAP' }
   | { t: 'REQUEST_PLANNER' }
   | {
@@ -96,6 +188,8 @@ import {
 } from './worker/histogram-updater';
 import { computeTopK } from './worker/top-k';
 import { ingestDataset, binsForSpec, type ColumnarPayload } from './worker/ingest-executor';
+import { createLogger } from './utils/logger';
+import { RowActivator, type RowActivatorState } from './engine/row-activator';
 
 const BUFFER_THRESHOLD_ROWS = 32_768;
 const BUFFER_THRESHOLD_WORK = 1_048_576; // rows * dims
@@ -116,7 +210,7 @@ type EngineState = {
   activeRows: Uint8Array;
   indexes: CsrIndex[];
   indexReady: boolean[];
-  filters: Array<{ lo: number; hi: number } | null>;
+  filters: Array<{ rangeMin: number; rangeMax: number } | null>;
   activeCount: number;
   profile: ProfileCollector | null;
   profiling: boolean;
@@ -142,6 +236,7 @@ type ProfileCollector = {
 };
 
 export function createProtocol(post: (message: MsgFromWorker) => void) {
+  const logger = createLogger('Worker');
   const profiling = Boolean((globalThis as { __CFX_PROFILE_CLEAR?: boolean }).__CFX_PROFILE_CLEAR);
   const state: EngineState = {
     rowCount: 0,
@@ -175,9 +270,9 @@ export function createProtocol(post: (message: MsgFromWorker) => void) {
           buildIndex(state, message.dimId, post);
           break;
         case 'FILTER_SET':
-          console.log(`[Worker] FILTER_SET received: dimId=${message.dimId}, range=[${message.lo}, ${message.hi}]`);
-          applyFilter(state, message.dimId, { lo: message.lo, hi: message.hi });
-          console.log(`[Worker] After applyFilter, activeCount=${state.activeCount}`);
+          logger.log(`FILTER_SET received: dimId=${message.dimId}, range=[${message.rangeMin}, ${message.rangeMax}]`);
+          applyFilter(state, message.dimId, { rangeMin: message.rangeMin, rangeMax: message.rangeMax });
+          logger.log(`After applyFilter, activeCount=${state.activeCount}`);
           handleFrame(message.seq, state, post);
           break;
       case 'FILTER_CLEAR':
@@ -320,6 +415,7 @@ function isColumnarPayload(value: unknown): value is ColumnarPayload {
 }
 
 function handleFrame(seq: number, state: EngineState, post: (message: MsgFromWorker) => void) {
+  const logger = createLogger('Worker');
   const profileSnapshot = state.profile?.lastClear ? { clear: state.profile.lastClear } : null;
 
   // DEBUG: Log histogram values before sending
@@ -327,7 +423,7 @@ function handleFrame(seq: number, state: EngineState, post: (message: MsgFromWor
     const sum = Array.from(h.front).reduce((a, b) => a + b, 0);
     return `[dim${id}:${sum}]`;
   }).join(' ');
-  console.log(`[Worker] handleFrame seq=${seq}, sums=${debugSums}, activeCount=${state.activeCount}`);
+  logger.log(`handleFrame seq=${seq}, sums=${debugSums}, activeCount=${state.activeCount}`);
 
   post({
     t: 'FRAME',
@@ -352,7 +448,7 @@ function handleFrame(seq: number, state: EngineState, post: (message: MsgFromWor
   });
 }
 
-function applyFilter(state: EngineState, dimId: number, range: { lo: number; hi: number } | null) {
+function applyFilter(state: EngineState, dimId: number, range: { rangeMin: number; rangeMax: number } | null) {
   if (!state.layout) return;
   const previous = state.filters[dimId];
   state.filters[dimId] = range;
@@ -381,20 +477,21 @@ function applyFilter(state: EngineState, dimId: number, range: { lo: number; hi:
     buildIndex(state, dimId, () => {});
   }
 
-  const { layout, columns, histograms, activeRows, indexes } = state;
+  const { layout, activeRows, indexes } = state;
   const requiredFilters = countActiveFilters(state.filters);
   const refcount = layout.refcount;
   const index = indexes[dimId];
+  const rowActivator = new RowActivator(state as unknown as RowActivatorState);
 
   if (diff.removed.length > 0) {
-    for (const [lo, hi] of diff.removed) {
-      applyRange(index, lo, hi, (row) => updateRowState(row, -1));
+    for (const [rangeMin, rangeMax] of diff.removed) {
+      applyRange(index, rangeMin, rangeMax, (row) => updateRowState(row, -1));
     }
   }
 
   if (diff.added.length > 0) {
-    for (const [lo, hi] of diff.added) {
-      applyRange(index, lo, hi, (row) => updateRowState(row, 1));
+    for (const [rangeMin, rangeMax] of diff.added) {
+      applyRange(index, rangeMin, rangeMax, (row) => updateRowState(row, 1));
     }
   }
 
@@ -405,99 +502,37 @@ function applyFilter(state: EngineState, dimId: number, range: { lo: number; hi:
     const isActive = next >= requiredFilters;
 
     if (!wasActive && isActive) {
-      activateRow(row);
+      rowActivator.activate(row);
     } else if (wasActive && !isActive) {
-      deactivateRow(row);
+      rowActivator.deactivate(row);
     }
-  }
-
-  function activateRow(row: number) {
-    activeRows[row] = 1;
-    setMask(layout.activeMask, row, true);
-    const simd = state.histogramMode === 'simd' ? state.simd : null;
-    if (simd) {
-      simd.record(row, 1);
-    } else {
-      for (let dim = 0; dim < histograms.length; dim++) {
-        const bin = columns[dim][row];
-        histograms[dim].front[bin]++;
-        histograms[dim].back[bin]++;
-
-        // NEW: Incremental coarse update (near-zero cost)
-        const coarse = state.coarseHistograms[dim];
-        if (coarse) {
-          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
-          const coarseIdx = Math.floor(bin / factor);
-          coarse.front[coarseIdx]++;
-          coarse.back[coarseIdx]++;
-        }
-      }
-    }
-    // NEW: Update reductions incrementally
-    for (const [dimId, reduction] of state.reductions) {
-      const bin = columns[dimId][row];
-      const value = reduction.valueColumn[row];
-      reduction.sumBuffers.front[bin] += value;
-      reduction.sumBuffers.back[bin] += value;
-    }
-    state.activeCount++;
-  }
-
-  function deactivateRow(row: number) {
-    activeRows[row] = 0;
-    setMask(layout.activeMask, row, false);
-    const simd = state.histogramMode === 'simd' ? state.simd : null;
-    if (simd) {
-      simd.record(row, -1);
-    } else {
-      for (let dim = 0; dim < histograms.length; dim++) {
-        const bin = columns[dim][row];
-        histograms[dim].front[bin]--;
-        histograms[dim].back[bin]--;
-
-        // NEW: Incremental coarse update
-        const coarse = state.coarseHistograms[dim];
-        if (coarse) {
-          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
-          const coarseIdx = Math.floor(bin / factor);
-          coarse.front[coarseIdx]--;
-          coarse.back[coarseIdx]--;
-        }
-      }
-    }
-    // NEW: Update reductions incrementally
-    for (const [dimId, reduction] of state.reductions) {
-      const bin = columns[dimId][row];
-      const value = reduction.valueColumn[row];
-      reduction.sumBuffers.front[bin] -= value;
-      reduction.sumBuffers.back[bin] -= value;
-    }
-    state.activeCount--;
   }
 
   flushSimd(state);
 }
 
-function clearFilterRange(state: EngineState, dimId: number, previous: { lo: number; hi: number }) {
+function clearFilterRange(state: EngineState, dimId: number, previous: { rangeMin: number; rangeMax: number }) {
   const { layout } = state;
   if (!layout) return;
   const layoutRef = layout;
+  const logger = createLogger('Worker');
 
   if (!state.indexReady[dimId]) {
     buildIndex(state, dimId, () => {});
   }
 
-  const { columns, histograms, activeRows, indexes } = state;
+  const { activeRows, indexes, histograms } = state;
   const requiredFilters = countActiveFilters(state.filters);
   const refcount = layoutRef.refcount;
   const index = indexes[dimId];
   const bins = histograms[dimId].front.length;
+  const rowActivator = new RowActivator(state as unknown as RowActivatorState);
 
-  const removeLo = Math.max(previous.lo, 0);
-  const removeHi = Math.min(previous.hi, bins - 1);
+  const removeMin = Math.max(previous.rangeMin, 0);
+  const removeMax = Math.min(previous.rangeMax, bins - 1);
 
   const offsets = index.binOffsets;
-  const insideCount = offsets[removeHi + 1] - offsets[removeLo];
+  const insideCount = offsets[removeMax + 1] - offsets[removeMin];
   const totalRows = state.rowCount;
   const outsideCount = totalRows - insideCount;
   const collector = state.profile;
@@ -522,8 +557,8 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
   const useDelta = plan === 'delta';
 
   if (DEBUG_MODE && !useDelta) {
-    console.log(
-      `[CrossfilterX Debug] Full recompute triggered. ` +
+    logger.log(
+      `Full recompute triggered. ` +
         `Inside: ${insideCount}, Outside: ${outsideCount}, ` +
         `Reason: ${plan === 'recompute' ? 'Planner decision' : 'Fallback'}`
     );
@@ -538,7 +573,7 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
         insideRows: insideCount,
         outsideRows: outsideCount,
         outsideFraction,
-        rangeBins: removeHi >= removeLo ? removeHi - removeLo + 1 : 0,
+        rangeBins: removeMax >= removeMin ? removeMax - removeMin + 1 : 0,
         buffered: false
       };
     }
@@ -552,20 +587,20 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
     let outsideRowsVisited = 0;
     const insideStart = performance.now();
     const insideBuffers = allocateBuffers ? createHistogramBuffers(histograms.length, bins) : null;
-    applyRange(index, removeLo, removeHi, (row) => {
+    applyRange(index, removeMin, removeMax, (row) => {
       insideRowsVisited++;
       adjustRow(row, -1, insideBuffers);
     });
     const afterInside = performance.now();
     const outsideBuffers = allocateBuffers ? createHistogramBuffers(histograms.length, bins) : null;
-    if (removeLo > 0) {
-      applyRange(index, 0, removeLo - 1, (row) => {
+    if (removeMin > 0) {
+      applyRange(index, 0, removeMin - 1, (row) => {
         outsideRowsVisited++;
         adjustRow(row, 0, outsideBuffers);
       });
     }
-    if (removeHi < bins - 1) {
-      applyRange(index, removeHi + 1, bins - 1, (row) => {
+    if (removeMax < bins - 1) {
+      applyRange(index, removeMax + 1, bins - 1, (row) => {
         outsideRowsVisited++;
         adjustRow(row, 0, outsideBuffers);
       });
@@ -585,7 +620,7 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
       outsideMs,
       totalMs,
       outsideFraction,
-      rangeBins: removeHi >= removeLo ? removeHi - removeLo + 1 : 0,
+      rangeBins: removeMax >= removeMin ? removeMax - removeMin + 1 : 0,
       buffered: allowBuffers && buffersEnabled
     };
     state.planner.record('delta', totalMs, insideRowsVisited + outsideRowsVisited);
@@ -593,22 +628,22 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
     const deltaStart = performance.now();
     let rowsVisited = 0;
     const insideBuffers = allocateBuffers ? createHistogramBuffers(histograms.length, bins) : null;
-    applyRange(index, removeLo, removeHi, (row) => {
+    applyRange(index, removeMin, removeMax, (row) => {
       rowsVisited++;
       adjustRow(row, -1, insideBuffers);
     });
     flushHistogramBuffers(insideBuffers, histograms);
 
     const outsideBuffers = allocateBuffers ? createHistogramBuffers(histograms.length, bins) : null;
-    if (removeLo > 0) {
-      applyRange(index, 0, removeLo - 1, (row) => {
+    if (removeMin > 0) {
+      applyRange(index, 0, removeMin - 1, (row) => {
         rowsVisited++;
         adjustRow(row, 0, outsideBuffers);
       });
     }
 
-    if (removeHi < bins - 1) {
-      applyRange(index, removeHi + 1, bins - 1, (row) => {
+    if (removeMax < bins - 1) {
+      applyRange(index, removeMax + 1, bins - 1, (row) => {
         rowsVisited++;
         adjustRow(row, 0, outsideBuffers);
       });
@@ -626,82 +661,10 @@ function clearFilterRange(state: EngineState, dimId: number, previous: { lo: num
     const wasActive = activeRows[row] === 1;
     const isActive = next >= requiredFilters;
     if (!wasActive && isActive) {
-      activateRow(row, buffers);
+      rowActivator.activate(row, buffers);
     } else if (wasActive && !isActive) {
-      deactivateRow(row, buffers);
+      rowActivator.deactivate(row, buffers);
     }
-  }
-
-function activateRow(row: number, buffers?: HistogramBuffer[] | null) {
-    activeRows[row] = 1;
-    setMask(layoutRef.activeMask, row, true);
-    const simd = !buffers && state.histogramMode === 'simd' ? state.simd : null;
-    if (buffers) {
-      for (let dim = 0; dim < buffers.length; dim++) {
-        buffers[dim].inc(columns[dim][row]);
-      }
-    } else if (simd) {
-      simd.record(row, 1);
-    } else {
-      for (let dim = 0; dim < histograms.length; dim++) {
-        const bin = columns[dim][row];
-        histograms[dim].front[bin]++;
-        histograms[dim].back[bin]++;
-
-        // NEW: Incremental coarse update (near-zero cost)
-        const coarse = state.coarseHistograms[dim];
-        if (coarse) {
-          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
-          const coarseIdx = Math.floor(bin / factor);
-          coarse.front[coarseIdx]++;
-          coarse.back[coarseIdx]++;
-        }
-      }
-    }
-    // NEW: Update reductions incrementally
-    for (const [dimId, reduction] of state.reductions) {
-      const bin = columns[dimId][row];
-      const value = reduction.valueColumn[row];
-      reduction.sumBuffers.front[bin] += value;
-      reduction.sumBuffers.back[bin] += value;
-    }
-    state.activeCount++;
-  }
-
-function deactivateRow(row: number, buffers?: HistogramBuffer[] | null) {
-    activeRows[row] = 0;
-    setMask(layoutRef.activeMask, row, false);
-    const simd = !buffers && state.histogramMode === 'simd' ? state.simd : null;
-    if (buffers) {
-      for (let dim = 0; dim < buffers.length; dim++) {
-        buffers[dim].dec(columns[dim][row]);
-      }
-    } else if (simd) {
-      simd.record(row, -1);
-    } else {
-      for (let dim = 0; dim < histograms.length; dim++) {
-        const bin = columns[dim][row];
-        histograms[dim].front[bin]--;
-        histograms[dim].back[bin]--;
-
-        // NEW: Incremental coarse update
-        const coarse = state.coarseHistograms[dim];
-        if (coarse) {
-          const factor = Math.ceil(histograms[dim].front.length / coarse.front.length);
-          const coarseIdx = Math.floor(bin / factor);
-          coarse.front[coarseIdx]--;
-          coarse.back[coarseIdx]--;
-        }
-      }
-    }
-    // NEW: Update reductions incrementally
-    for (const [dimId, reduction] of state.reductions) {
-      const bin = columns[dimId][row];
-      const value = reduction.valueColumn[row];
-      reduction.sumBuffers.front[bin] -= value;
-      reduction.sumBuffers.back[bin] -= value;
-    }
-    state.activeCount--;
   }
 }
 
@@ -737,7 +700,9 @@ function fullRecompute(state: EngineState) {
 
   const { columns, histograms, filters, reductions } = state;
   const rowCount = state.rowCount;
+  const rowActivator = new RowActivator(state as unknown as RowActivatorState);
 
+  // Clear all state
   for (const histogram of histograms) {
     histogram.front.fill(0);
     histogram.back.fill(0);
@@ -745,6 +710,12 @@ function fullRecompute(state: EngineState) {
   for (const reduction of reductions.values()) {
     reduction.sumBuffers.front.fill(0);
     reduction.sumBuffers.back.fill(0);
+  }
+  for (const coarse of state.coarseHistograms) {
+    if (coarse && coarse.front.length > 0) {
+      coarse.front.fill(0);
+      coarse.back.fill(0);
+    }
   }
   layout.refcount.fill(0);
   layout.activeMask.fill(0);
@@ -757,84 +728,102 @@ function fullRecompute(state: EngineState) {
 
     if (!passes) continue;
     activeCount++;
-    state.activeRows[row] = 1;
-    setMask(layout.activeMask, row, true);
-    for (let dim = 0; dim < histograms.length; dim++) {
-      const bin = columns[dim][row];
-      histograms[dim].front[bin]++;
-      histograms[dim].back[bin]++;
-    }
-    for (const [dimId, reduction] of reductions) {
-      const bin = columns[dimId][row];
-      const value = reduction.valueColumn[row];
-      reduction.sumBuffers.front[bin] += value;
-      reduction.sumBuffers.back[bin] += value;
-    }
+    // Use RowActivator for consistency and automatic SIMD/coarse histogram support
+    rowActivator.activate(row);
   }
 
   state.activeCount = activeCount;
-
-  // NEW: Compute coarse histograms from fine
-  for (let dim = 0; dim < state.histograms.length; dim++) {
-    const coarse = state.coarseHistograms[dim];
-    if (!coarse || coarse.front.length === 0) continue;
-
-    const fine = state.histograms[dim];
-    const factor = Math.ceil(fine.front.length / coarse.front.length);
-
-    coarse.front.fill(0);
-    coarse.back.fill(0);
-
-    for (let i = 0; i < fine.front.length; i++) {
-      const coarseIdx = Math.floor(i / factor);
-      coarse.front[coarseIdx] += fine.front[i];
-      coarse.back[coarseIdx] += fine.back[i];
-    }
-  }
 }
 
 function exhaustive(value: never): never {
   throw new Error(`Unhandled message type: ${JSON.stringify(value)}`);
 }
 
+/**
+ * Computes the set difference between two ranges for incremental filter updates.
+ *
+ * When a filter range changes from [2, 7] to [4, 9], instead of reprocessing
+ * everything, we compute:
+ * - **added**: Bins that became active (were outside old range, now inside new)
+ * - **removed**: Bins that became inactive (were inside old range, now outside new)
+ *
+ * ## Visual Example
+ *
+ * ```
+ * previous: [2, 7]        ████████████
+ * next:     [4, 9]              ████████████
+ *                         ────────────────────
+ * Bins:     0 1 2 3 4 5 6 7 8 9 10
+ *
+ * removed:  [2, 3]        ████
+ * added:    [8, 9]                      ████
+ * overlap:  [4, 7]              ████████
+ * ```
+ *
+ * ## Algorithm
+ *
+ * 1. **Check for no-op**: If ranges identical, return null
+ * 2. **Left expansion**: If new range extends left, add [newMin, oldMin-1]
+ * 3. **Right expansion**: If new range extends right, add [oldMax+1, newMax]
+ * 4. **Left contraction**: If new range shrank left, remove [oldMin, newMin-1]
+ * 5. **Right contraction**: If new range shrank right, remove [newMax+1, oldMax]
+ * 6. **Normalize**: Filter out invalid ranges where min > max
+ *
+ * ## Edge Cases
+ *
+ * - **Disjoint ranges**: Both added and removed will be non-empty
+ * - **Subset**: Only removed segments
+ * - **Superset**: Only added segments
+ * - **Partial overlap**: Both added and removed segments
+ *
+ * @param previous - Old filter range
+ * @param next - New filter range
+ * @returns Null if ranges identical, else { added, removed } range segments
+ */
 function diffRanges(
-  previous: { lo: number; hi: number },
-  next: { lo: number; hi: number }
+  previous: { rangeMin: number; rangeMax: number },
+  next: { rangeMin: number; rangeMax: number }
 ): { added: Array<[number, number]>; removed: Array<[number, number]> } | null {
-  if (previous.lo === next.lo && previous.hi === next.hi) {
+  // Fast path: no change
+  if (previous.rangeMin === next.rangeMin && previous.rangeMax === next.rangeMax) {
     return null;
   }
 
   const added: Array<[number, number]> = [];
   const removed: Array<[number, number]> = [];
 
-  if (next.lo < previous.lo) {
-    added.push([next.lo, Math.min(previous.lo - 1, next.hi)]);
+  // Check if new range expanded to the left
+  if (next.rangeMin < previous.rangeMin) {
+    added.push([next.rangeMin, Math.min(previous.rangeMin - 1, next.rangeMax)]);
   }
-  if (next.hi > previous.hi) {
-    added.push([Math.max(previous.hi + 1, next.lo), next.hi]);
-  }
-
-  if (previous.lo < next.lo) {
-    removed.push([previous.lo, Math.min(next.lo - 1, previous.hi)]);
-  }
-  if (previous.hi > next.hi) {
-    removed.push([Math.max(next.hi + 1, previous.lo), previous.hi]);
+  // Check if new range expanded to the right
+  if (next.rangeMax > previous.rangeMax) {
+    added.push([Math.max(previous.rangeMax + 1, next.rangeMin), next.rangeMax]);
   }
 
+  // Check if old range extended further left (now removed)
+  if (previous.rangeMin < next.rangeMin) {
+    removed.push([previous.rangeMin, Math.min(next.rangeMin - 1, previous.rangeMax)]);
+  }
+  // Check if old range extended further right (now removed)
+  if (previous.rangeMax > next.rangeMax) {
+    removed.push([Math.max(next.rangeMax + 1, previous.rangeMin), previous.rangeMax]);
+  }
+
+  // Normalize: remove invalid ranges where min > max
   return { added: normalizeRanges(added), removed: normalizeRanges(removed) };
 }
 
 function normalizeRanges(ranges: Array<[number, number]>) {
   return ranges
-    .map(([lo, hi]) => (lo <= hi ? [lo, hi] : null))
+    .map(([rangeMin, rangeMax]) => (rangeMin <= rangeMax ? [rangeMin, rangeMax] : null))
     .filter((segment): segment is [number, number] => segment !== null);
 }
 
-function applyRange(index: CsrIndex, lo: number, hi: number, visit: (row: number) => void) {
+function applyRange(index: CsrIndex, rangeMin: number, rangeMax: number, visit: (row: number) => void) {
   const { rowIdsByBin, binOffsets } = index;
-  const end = Math.min(hi, binOffsets.length - 2);
-  const start = Math.max(lo, 0);
+  const end = Math.min(rangeMax, binOffsets.length - 2);
+  const start = Math.max(rangeMin, 0);
   for (let bin = start; bin <= end; bin++) {
     const binStart = binOffsets[bin];
     const binEnd = binOffsets[bin + 1];
@@ -844,7 +833,7 @@ function applyRange(index: CsrIndex, lo: number, hi: number, visit: (row: number
   }
 }
 
-function countActiveFilters(filters: Array<{ lo: number; hi: number } | null>) {
+function countActiveFilters(filters: Array<{ rangeMin: number; rangeMax: number } | null>) {
   let count = 0;
   for (const filter of filters) {
     if (filter) count++;
@@ -940,7 +929,7 @@ function buildIndex(state: EngineState, dimId: number, post: (message: MsgFromWo
 }
 
 function evaluateRow(
-  filters: Array<{ lo: number; hi: number } | null>,
+  filters: Array<{ rangeMin: number; rangeMax: number } | null>,
   columns: Uint16Array[],
   row: number
 ) {
@@ -950,7 +939,7 @@ function evaluateRow(
     const filter = filters[dim];
     if (!filter) continue;
     const value = columns[dim][row];
-    if (value < filter.lo || value > filter.hi) {
+    if (value < filter.rangeMin || value > filter.rangeMax) {
       passes = false;
       continue;
     }
@@ -959,12 +948,57 @@ function evaluateRow(
   return { passes, satisfied };
 }
 
+/**
+ * Sets or clears a bit in the active row bitmask using bit manipulation.
+ *
+ * The mask compacts 8 row states into each byte, reducing memory by 8x
+ * compared to a boolean array. Each byte stores 8 row flags as individual bits.
+ *
+ * ## Bit Packing Layout
+ *
+ * ```
+ * mask[0]: [row7 row6 row5 row4 row3 row2 row1 row0]  // rows 0-7
+ * mask[1]: [row15 row14 ... row9 row8]                // rows 8-15
+ * mask[2]: [row23 row22 ... row17 row16]              // rows 16-23
+ * ...
+ * ```
+ *
+ * ## Algorithm
+ *
+ * 1. **Find byte index**: `row >> 3` divides by 8 (which byte?)
+ * 2. **Find bit position**: `row & 7` computes row % 8 (which bit in that byte?)
+ * 3. **Set bit**: `mask[index] |= (1 << bit)` - OR with bit mask
+ * 4. **Clear bit**: `mask[index] &= ~(1 << bit)` - AND with inverted bit mask
+ *
+ * ## Example
+ *
+ * Mark row 13 as active:
+ * ```
+ * row = 13
+ * index = 13 >> 3 = 1     // byte 1 (rows 8-15)
+ * bit = 13 & 7 = 5        // bit 5 within that byte
+ * mask[1] |= (1 << 5)     // Set bit 5: 0b00100000
+ * ```
+ *
+ * Before: mask[1] = 0b00000011 (rows 8, 9 active)
+ * After:  mask[1] = 0b00100011 (rows 8, 9, 13 active)
+ *
+ * ## Performance
+ *
+ * - **Memory**: 1 bit per row = n/8 bytes (vs n bytes for boolean[])
+ * - **Time**: O(1) bit manipulation operations
+ * - **Cache-friendly**: Compact representation improves cache hit rate
+ *
+ * @param mask - Bit-packed active row flags (1 bit per row)
+ * @param row - Row index to set or clear
+ * @param isActive - true to set bit, false to clear bit
+ */
 function setMask(mask: Uint8Array, row: number, isActive: boolean) {
-  const index = row >> 3;
-  const bit = row & 7;
+  const index = row >> 3;     // Divide by 8 to find byte index
+  const bit = row & 7;        // Modulo 8 to find bit position (0-7)
   if (isActive) {
-    mask[index] |= 1 << bit;
+    mask[index] |= 1 << bit;  // Set bit: OR with bit mask
   } else {
-    mask[index] &= ~(1 << bit);
+    mask[index] &= ~(1 << bit);  // Clear bit: AND with inverted mask
   }
 }

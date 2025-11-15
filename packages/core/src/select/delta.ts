@@ -1,7 +1,7 @@
 import type { CsrIndex } from '../indexers/csr';
 import { Refcount } from './refcount';
 
-export type Range = { lo: number; hi: number };
+export type Range = { rangeMin: number; rangeMax: number };
 
 export type RangeDiff = {
   added: Range[];
@@ -19,7 +19,7 @@ export function applyDelta(
   const { rowIdsByBin, binOffsets } = index;
 
   for (const range of diff.added) {
-    for (let bin = range.lo; bin <= range.hi; bin++) {
+    for (let bin = range.rangeMin; bin <= range.rangeMax; bin++) {
       const start = binOffsets[bin];
       const end = binOffsets[bin + 1];
       for (let cursor = start; cursor < end; cursor++) {
@@ -32,7 +32,7 @@ export function applyDelta(
   }
 
   for (const range of diff.removed) {
-    for (let bin = range.lo; bin <= range.hi; bin++) {
+    for (let bin = range.rangeMin; bin <= range.rangeMax; bin++) {
       const start = binOffsets[bin];
       const end = binOffsets[bin + 1];
       for (let cursor = start; cursor < end; cursor++) {

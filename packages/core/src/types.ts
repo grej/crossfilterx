@@ -79,10 +79,50 @@ export interface GroupHandle {
 }
 
 export interface CFHandle {
+  /**
+   * Creates a dimension for filtering and grouping.
+   *
+   * **IMPORTANT**: Only string column names are supported. Function-based dimensions
+   * are NOT supported because they block the main thread.
+   *
+   * @param name - Name of the column in your dataset
+   * @returns DimensionHandle for filtering and grouping
+   *
+   * @example Supported Usage
+   * ```typescript
+   * const priceDim = cf.dimension('price');
+   * priceDim.filter([100, 200]);
+   * ```
+   *
+   * @example NOT Supported - Will throw error
+   * ```typescript
+   * // ❌ This will throw an error
+   * cf.dimension(d => d.computed)
+   * ```
+   *
+   * @throws Error if a function is passed - pre-compute columns in your data instead
+   */
   dimension(name: string | ((row: unknown) => number | string)): DimensionHandle;
+
   group(name: string | DimensionHandle, options?: GroupOptions): GroupHandle;
   whenIdle(): Promise<void>;
+
+  /**
+   * Releases all resources used by this CrossfilterX instance.
+   *
+   * **IMPORTANT**: Always call dispose() when you're done using the instance
+   * to prevent memory leaks. Workers and SharedArrayBuffers will not be
+   * garbage collected automatically.
+   *
+   * @example
+   * ```typescript
+   * const cf = crossfilterX(data);
+   * // ... use cf ...
+   * cf.dispose(); // Clean up when done
+   * ```
+   */
   dispose(): void;
+
   buildIndex(name: string): Promise<void>;
   indexStatus(name: string): IndexStatus | undefined;
   profile(): ProfileSnapshot | null;

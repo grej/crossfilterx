@@ -17,7 +17,8 @@
     "test:e2e:webkit": "playwright test --project=webkit",
     "test:all": "npm run test && npm run test:e2e",
     "bench": "node scripts/run-bench.mjs",
-    "bench:micro": "node scripts/run-histogram-microbench.mjs"
+    "bench:micro": "node scripts/run-histogram-microbench.mjs",
+    "bench:perf": "npm run build && node --expose-gc scripts/run-performance-bench.mjs"
   },
   "workspaces": [
     "packages/*"

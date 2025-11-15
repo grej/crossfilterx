@@ -1,0 +1,14 @@
+# Netlify configuration for CrossfilterX
+
+[build]
+  # Publish the docs directory for the demo site
+  publish = "docs"
+  # No build command needed for static site
+  command = "echo 'No build needed'"
+
+# Required headers for SharedArrayBuffer support
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Embedder-Policy = "require-corp"

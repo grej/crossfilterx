@@ -12,7 +12,7 @@ export type SimpleDimension = {
 export type SimpleEngine = {
   histogram(dim: number): Uint32Array;
   activeCount(): number;
-  filter(dim: number, lo: number, hi: number): void;
+  filter(dim: number, rangeMin: number, rangeMax: number): void;
   clear(dim: number): void;
 };
 
@@ -28,7 +28,7 @@ type InternalState = {
   columns: Uint16Array[];
   scales: Scale[];
   histograms: Uint32Array[];
-  filters: Array<{ lo: number; hi: number } | null>;
+  filters: Array<{ rangeMin: number; rangeMax: number } | null>;
   active: number;
 };
 
@@ -44,7 +44,7 @@ export function createSimpleEngine(schema: SimpleDimension[], rows: Record<strin
   }));
   const columns = ingestRows(rows, descriptors);
   const histograms = scales.map((scale) => new Uint32Array(1 << scale.bits));
-  const filters: Array<{ lo: number; hi: number } | null> = new Array(schema.length).fill(null);
+  const filters: Array<{ rangeMin: number; rangeMax: number } | null> = new Array(schema.length).fill(null);
 
   const state: InternalState = {
     columns,
@@ -63,8 +63,8 @@ export function createSimpleEngine(schema: SimpleDimension[], rows: Record<strin
     activeCount() {
       return state.active;
     },
-    filter(dim: number, lo: number, hi: number) {
-      state.filters[dim] = { lo, hi };
+    filter(dim: number, rangeMin: number, rangeMax: number) {
+      state.filters[dim] = { rangeMin, rangeMax };
       recompute(state);
     },
     clear(dim: number) {
@@ -98,7 +98,7 @@ function passesFilters(state: InternalState, row: number) {
     const filter = state.filters[dim];
     if (!filter) continue;
     const value = state.columns[dim][row];
-    if (value < filter.lo || value > filter.hi) {
+    if (value < filter.rangeMin || value > filter.rangeMax) {
       return false;
     }
   }

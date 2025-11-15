@@ -31,7 +31,7 @@ describe('SIMD histogram mode', () => {
     const rows = Array.from({ length: 16 }, (_, value) => ({ value }));
     handleMessage({ t: 'INGEST', schema, rows } satisfies MsgToWorker);
 
-    handleMessage({ t: 'FILTER_SET', dimId: 0, lo: 4, hi: 10, seq: 1 } satisfies MsgToWorker);
+    handleMessage({ t: 'FILTER_SET', dimId: 0, rangeMin: 4, rangeMax: 10, seq: 1 } satisfies MsgToWorker);
     const filtered = findFrame(messages, 1);
     expect(filtered?.activeCount).toBe(7);
     if (filtered) {

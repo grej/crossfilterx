@@ -19,9 +19,9 @@ describe('protocol delta behaviour', () => {
     const baseFrame = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 0);
     expect(baseFrame && baseFrame.t === 'FRAME' ? baseFrame.activeCount : null).toBe(5);
 
-    const lo = quantizeValue(2, 0, 4, 4);
-    const hi = quantizeValue(3, 0, 4, 4);
-    handleMessage({ t: 'FILTER_SET', dimId: 0, lo, hi, seq: 1 });
+    const rangeMin = quantizeValue(2, 0, 4, 4);
+    const rangeMax = quantizeValue(3, 0, 4, 4);
+    handleMessage({ t: 'FILTER_SET', dimId: 0, rangeMin, rangeMax, seq: 1 });
     const filtered = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 1);
     expect(filtered && filtered.t === 'FRAME' ? filtered.activeCount : null).toBe(2);
 

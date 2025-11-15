@@ -13,15 +13,15 @@ describe('CSR delta behaviour', () => {
     const schema = [{ name: 'value', type: 'number', bits: 4 }];
     handleMessage({ t: 'INGEST', schema, rows });
 
-    const lo1 = quantizeValue(1, 0, 5, 4);
-    const hi1 = quantizeValue(4, 0, 5, 4);
-    handleMessage({ t: 'FILTER_SET', dimId: 0, lo: lo1, hi: hi1, seq: 1 });
+    const rangeMin1 = quantizeValue(1, 0, 5, 4);
+    const rangeMax1 = quantizeValue(4, 0, 5, 4);
+    handleMessage({ t: 'FILTER_SET', dimId: 0, rangeMin: rangeMin1, rangeMax: rangeMax1, seq: 1 });
     const filtered = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 1);
     expect(filtered && filtered.t === 'FRAME' ? filtered.activeCount : null).toBe(4);
 
-    const lo2 = quantizeValue(2, 0, 5, 4);
-    const hi2 = quantizeValue(3, 0, 5, 4);
-    handleMessage({ t: 'FILTER_SET', dimId: 0, lo: lo2, hi: hi2, seq: 2 });
+    const rangeMin2 = quantizeValue(2, 0, 5, 4);
+    const rangeMax2 = quantizeValue(3, 0, 5, 4);
+    handleMessage({ t: 'FILTER_SET', dimId: 0, rangeMin: rangeMin2, rangeMax: rangeMax2, seq: 2 });
     const narrowed = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 2);
     expect(narrowed && narrowed.t === 'FRAME' ? narrowed.activeCount : null).toBe(2);
 
@@ -40,15 +40,15 @@ describe('CSR delta behaviour', () => {
     const schema = [{ name: 'value', type: 'number', bits: 4 }];
     handleMessage({ t: 'INGEST', schema, rows });
 
-    const lo = quantizeValue(1, 1, 7, 4);
-    const hi = quantizeValue(3, 1, 7, 4);
-    handleMessage({ t: 'FILTER_SET', dimId: 0, lo, hi, seq: 1 });
+    const rangeMin = quantizeValue(1, 1, 7, 4);
+    const rangeMax = quantizeValue(3, 1, 7, 4);
+    handleMessage({ t: 'FILTER_SET', dimId: 0, rangeMin, rangeMax, seq: 1 });
     const initial = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 1);
     expect(initial && initial.t === 'FRAME' ? initial.activeCount : null).toBe(3);
 
-    const lo2 = quantizeValue(2, 1, 7, 4);
-    const hi2 = quantizeValue(7, 1, 7, 4);
-    handleMessage({ t: 'FILTER_SET', dimId: 0, lo: lo2, hi: hi2, seq: 2 });
+    const rangeMin2 = quantizeValue(2, 1, 7, 4);
+    const rangeMax2 = quantizeValue(7, 1, 7, 4);
+    handleMessage({ t: 'FILTER_SET', dimId: 0, rangeMin: rangeMin2, rangeMax: rangeMax2, seq: 2 });
     const widened = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 2);
     expect(widened && widened.t === 'FRAME' ? widened.activeCount : null).toBe(4);
 

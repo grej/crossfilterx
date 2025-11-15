@@ -34,7 +34,7 @@ describe('protocol recompute', () => {
         : null
     ).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
-    const filter: MsgToWorker = { t: 'FILTER_SET', dimId: 0, lo: 5, hi: 10, seq: 1 };
+    const filter: MsgToWorker = { t: 'FILTER_SET', dimId: 0, rangeMin: 5, rangeMax: 10, seq: 1 };
     handleMessage(filter);
 
     const filtered = messages.find((msg) => msg.t === 'FRAME' && msg.seq === 1);

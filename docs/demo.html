@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CrossfilterX - Working Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 16px;
+      padding: 2rem;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    h1 {
+      color: #667eea;
+      margin-bottom: 1rem;
+      text-align: center;
+    }
+    .status {
+      padding: 1rem;
+      margin: 1rem 0;
+      border-radius: 8px;
+      background: #f0f9ff;
+      border: 1px solid #bae6fd;
+    }
+    .error {
+      background: #fef2f2;
+      border-color: #fecaca;
+      color: #991b1b;
+    }
+    .success {
+      background: #f0fdf4;
+      border-color: #bbf7d0;
+      color: #166534;
+    }
+    .controls {
+      margin: 2rem 0;
+    }
+    button {
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin: 0.5rem;
+    }
+    button:hover {
+      background: #5568d3;
+    }
+    button:disabled {
+      background: #cbd5e1;
+      cursor: not-allowed;
+    }
+    .slider-group {
+      margin: 1.5rem 0;
+    }
+    .slider-group label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      color: #374151;
+    }
+    input[type="range"] {
+      width: 100%;
+      height: 8px;
+      border-radius: 5px;
+      background: #e5e7eb;
+      outline: none;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin: 2rem 0;
+    }
+    .stat-card {
+      padding: 1rem;
+      background: #f9fafb;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+    }
+    .stat-label {
+      font-size: 0.875rem;
+      color: #6b7280;
+      margin-bottom: 0.25rem;
+    }
+    .stat-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #1f2937;
+    }
+    canvas {
+      width: 100%;
+      height: 200px;
+      margin: 1rem 0;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+    }
+    .github-link {
+      display: inline-block;
+      margin: 1rem 0;
+      color: #667eea;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .github-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🚀 CrossfilterX Live Demo</h1>
+    <a href="https://github.com/grej/crossfilterx" class="github-link" target="_blank">
+      → View on GitHub
+    </a>
+
+    <div id="status" class="status">
+      Checking SharedArrayBuffer support...
+    </div>
+
+    <div class="controls">
+      <h3>Dataset Size</h3>
+      <button onclick="loadData(1000)">1K rows</button>
+      <button onclick="loadData(10000)">10K rows</button>
+      <button onclick="loadData(50000)">50K rows</button>
+      <button onclick="loadData(100000)">100K rows</button>
+    </div>
+
+    <div class="slider-group">
+      <label for="distance-filter">
+        Distance Filter: <span id="distance-value">All</span>
+      </label>
+      <input type="range" id="distance-filter" min="0" max="100" value="100" disabled>
+    </div>
+
+    <div class="slider-group">
+      <label for="delay-filter">
+        Delay Filter: <span id="delay-value">All</span>
+      </label>
+      <input type="range" id="delay-filter" min="0" max="100" value="100" disabled>
+    </div>
+
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-label">Total Rows</div>
+        <div class="stat-value" id="total-count">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Filtered Rows</div>
+        <div class="stat-value" id="filtered-count">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Filter Time</div>
+        <div class="stat-value" id="filter-time">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Avg Distance</div>
+        <div class="stat-value" id="avg-distance">—</div>
+      </div>
+    </div>
+
+    <div>
+      <h3>Distance Distribution</h3>
+      <canvas id="distance-chart"></canvas>
+    </div>
+
+    <div>
+      <h3>Delay Distribution</h3>
+      <canvas id="delay-chart"></canvas>
+    </div>
+  </div>
+
+  <script type="module">
+    // Check SharedArrayBuffer support
+    const statusEl = document.getElementById('status');
+
+    if (typeof SharedArrayBuffer === 'undefined') {
+      statusEl.className = 'status error';
+      statusEl.innerHTML = `
+        <strong>⚠️ SharedArrayBuffer not available</strong><br>
+        This demo requires proper CORS headers. The site needs to be deployed to Netlify
+        with the configuration in <code>netlify.toml</code> to work properly.<br><br>
+        <strong>Why?</strong> CrossfilterX uses SharedArrayBuffer for zero-copy data sharing between
+        the main thread and Web Workers, which requires strict CORS headers for security.
+      `;
+      document.querySelectorAll('button').forEach(btn => btn.disabled = true);
+    } else {
+      statusEl.className = 'status success';
+      statusEl.textContent = '✅ SharedArrayBuffer available! Demo is ready.';
+
+      // Try to load CrossfilterX
+      try {
+        // This will work if the built library is available
+        // For now, show what the integration would look like
+        initDemo();
+      } catch (err) {
+        statusEl.className = 'status error';
+        statusEl.innerHTML = `
+          <strong>⚠️ CrossfilterX library not found</strong><br>
+          ${err.message}<br><br>
+          To build the library, run:<br>
+          <code>npm install && npm run build</code>
+        `;
+      }
+    }
+
+    function initDemo() {
+      statusEl.innerHTML = `
+        <strong>📦 Demo ready!</strong><br>
+        This is a placeholder demo. To use the actual CrossfilterX library:<br>
+        1. Build the library: <code>npm run build</code><br>
+        2. Import from: <code>import { crossfilterX } from './packages/core/dist/index.js'</code><br><br>
+        <em>For now, this shows the UI and demonstrates the CORS headers are working.</em>
+      `;
+    }
+
+    function generateData(size) {
+      const data = {
+        columns: {
+          distance: new Uint16Array(size),
+          delay: new Int16Array(size),
+          time: new Uint8Array(size),
+          day: new Uint8Array(size)
+        },
+        length: size
+      };
+
+      for (let i = 0; i < size; i++) {
+        data.columns.distance[i] = Math.floor(Math.random() * 3000);
+        data.columns.delay[i] = Math.floor(Math.random() * 200) - 50;
+        data.columns.time[i] = Math.floor(Math.random() * 24);
+        data.columns.day[i] = Math.floor(Math.random() * 7);
+      }
+
+      return data;
+    }
+
+    function drawChart(canvasId, bins, color = '#667eea') {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+
+      canvas.width = canvas.offsetWidth * dpr;
+      canvas.height = 200 * dpr;
+      ctx.scale(dpr, dpr);
+
+      const width = canvas.offsetWidth;
+      const height = 200;
+
+      ctx.clearRect(0, 0, width, height);
+
+      if (!bins || bins.length === 0) return;
+
+      const maxValue = Math.max(...bins);
+      const barWidth = width / bins.length;
+
+      ctx.fillStyle = color;
+
+      for (let i = 0; i < bins.length; i++) {
+        const barHeight = (bins[i] / maxValue) * height * 0.9;
+        const x = i * barWidth;
+        const y = height - barHeight;
+        ctx.fillRect(x, y, Math.max(1, barWidth - 1), barHeight);
+      }
+    }
+
+    window.loadData = function(size) {
+      const data = generateData(size);
+
+      // Update stats
+      document.getElementById('total-count').textContent = size.toLocaleString();
+      document.getElementById('filtered-count').textContent = size.toLocaleString();
+      document.getElementById('filter-time').textContent = '< 1ms';
+      document.getElementById('avg-distance').textContent = '1500 mi';
+
+      // Enable sliders
+      document.getElementById('distance-filter').disabled = false;
+      document.getElementById('delay-filter').disabled = false;
+
+      // Draw mock charts
+      const mockBins = new Uint32Array(64).fill(0).map(() => Math.floor(Math.random() * size / 50));
+      drawChart('distance-chart', mockBins, '#667eea');
+      drawChart('delay-chart', mockBins, '#764ba2');
+
+      statusEl.className = 'status success';
+      statusEl.innerHTML = `
+        <strong>✅ Loaded ${size.toLocaleString()} rows</strong><br>
+        Mock data generated. With the built library, this would use real CrossfilterX filtering.
+      `;
+    };
+
+    // Slider listeners
+    document.getElementById('distance-filter').addEventListener('input', (e) => {
+      const value = e.target.value;
+      document.getElementById('distance-value').textContent =
+        value === '100' ? 'All' : `0 - ${Math.round(3000 * value / 100)} mi`;
+    });
+
+    document.getElementById('delay-filter').addEventListener('input', (e) => {
+      const value = e.target.value;
+      document.getElementById('delay-value').textContent =
+        value === '100' ? 'All' : `${Math.round(-50 * (100 - value) / 100)} - ${Math.round(150 * value / 100)} min`;
+    });
+  </script>
+</body>
+</html>

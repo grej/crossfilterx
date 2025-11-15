@@ -2,6 +2,8 @@
 
 Modern, high-performance multidimensional filtering library with WebWorker and SIMD acceleration.
 
+**[🚀 Try the Live Demo](https://crossfilterx.netlify.app)** | **[📖 Documentation](#documentation)** | **[⭐ GitHub](https://github.com/grej/crossfilterx)**
+
 ## Features
 
 - 🚀 **Near drop-in replacement** for crossfilter2 with improved performance
@@ -63,7 +65,164 @@ const keys = delayGroup.keys(); // Unique values
 const count = bins.reduce((sum, bin) => sum + bin, 0);
 
 console.log(`Matching flights: ${count}`);
+
+// IMPORTANT: Always clean up when done
+cf.dispose();
 ```
+
+## Memory Management
+
+**⚠️ CRITICAL**: CrossfilterX uses Web Workers and SharedArrayBuffers that require explicit cleanup to prevent memory leaks.
+
+### Always Call dispose()
+
+Memory will **not** be automatically released when instances go out of scope. You **must** call `dispose()` when you're done:
+
+```typescript
+const cf = crossfilterX(data);
+
+// ... use crossfilter ...
+
+// Clean up when done
+cf.dispose();
+```
+
+### Framework Integration
+
+#### React
+
+```typescript
+import { useEffect, useState } from 'react';
+import { crossfilterX } from '@crossfilterx/core';
+
+function Dashboard({ data }) {
+  const [filteredCount, setFilteredCount] = useState(0);
+
+  useEffect(() => {
+    const cf = crossfilterX(data, { bins: 1024 });
+    const dim = cf.dimension('value');
+
+    // ... use crossfilter ...
+
+    // CRITICAL: Clean up on unmount
+    return () => {
+      cf.dispose();
+    };
+  }, [data]);
+
+  return <div>Filtered: {filteredCount}</div>;
+}
+```
+
+#### Vue 3
+
+```typescript
+import { onMounted, onUnmounted, ref } from 'vue';
+import { crossfilterX } from '@crossfilterx/core';
+
+export default {
+  setup() {
+    const filteredCount = ref(0);
+    let cf = null;
+
+    onMounted(() => {
+      cf = crossfilterX(data, { bins: 1024 });
+      // ... use crossfilter ...
+    });
+
+    onUnmounted(() => {
+      // CRITICAL: Clean up on unmount
+      if (cf) {
+        cf.dispose();
+      }
+    });
+
+    return { filteredCount };
+  }
+};
+```
+
+#### Angular
+
+```typescript
+import { Component, OnDestroy, OnInit } from '@angular/core';
+import { crossfilterX } from '@crossfilterx/core';
+
+@Component({
+  selector: 'app-dashboard',
+  template: '<div>Filtered: {{filteredCount}}</div>'
+})
+export class DashboardComponent implements OnInit, OnDestroy {
+  private cf: any;
+  filteredCount = 0;
+
+  ngOnInit() {
+    this.cf = crossfilterX(this.data, { bins: 1024 });
+    // ... use crossfilter ...
+  }
+
+  ngOnDestroy() {
+    // CRITICAL: Clean up on destroy
+    if (this.cf) {
+      this.cf.dispose();
+    }
+  }
+}
+```
+
+### Multiple Instances
+
+When managing multiple crossfilter instances, dispose of them systematically:
+
+```typescript
+class ChartManager {
+  private instances: CFHandle[] = [];
+
+  addChart(data: any) {
+    const cf = crossfilterX(data, { bins: 1024 });
+    this.instances.push(cf);
+    return cf;
+  }
+
+  dispose() {
+    // Clean up all instances
+    this.instances.forEach(cf => cf.dispose());
+    this.instances = [];
+  }
+}
+
+// Usage
+const manager = new ChartManager();
+manager.addChart(data1);
+manager.addChart(data2);
+
+// When done
+manager.dispose();
+```
+
+### Memory Leak Warnings
+
+CrossfilterX will warn you if too many instances are active simultaneously:
+
+```
+[CrossfilterX] 5 active instances detected.
+Call dispose() on unused instances to prevent memory leaks.
+```
+
+If you see this warning, review your code to ensure:
+1. You're calling `dispose()` on instances you're done with
+2. You're not creating unlimited instances in loops
+3. Your cleanup code is executing correctly (check `useEffect` dependencies, component lifecycle, etc.)
+
+### Why This Matters
+
+Without proper disposal:
+- **Web Workers continue running** in the background
+- **SharedArrayBuffers cannot be garbage collected** (can be tens of MB per instance)
+- **Memory usage grows unbounded** until the browser tab crashes
+- **Long-running SPAs will accumulate memory** over time
+
+The library includes a `FinalizationRegistry` as a safety net, but **you should not rely on it**. Always explicitly call `dispose()`.
 
 ### Columnar Data (Faster)
 
@@ -160,9 +319,31 @@ See [MIGRATION.md](./docs/migration.md) for a detailed migration guide.
 Key differences:
 
 1. **Async operations**: Use `await cf.whenIdle()` after mutations
-2. **Bin-based filtering**: Filters use bin indices, not raw values
-3. **No reduce functions**: Groups return histogram bins directly
-4. **Dimension filters**: Only range filters supported (for now)
+2. **No function dimensions**: Only string column names supported (see below)
+3. **Memory management**: Must call `dispose()` to prevent leaks
+4. **Bin-based filtering**: Filters use bin indices, not raw values
+5. **No reduce functions**: Groups return histogram bins directly
+6. **Dimension filters**: Only range filters supported (for now)
+
+### Function Dimensions Not Supported
+
+CrossfilterX does **not** support function-based dimensions because they block the main thread:
+
+```typescript
+// ❌ NOT SUPPORTED - Will throw error
+cf.dimension(d => d.price * d.quantity)
+
+// ✅ INSTEAD: Pre-compute in your data
+const data = rows.map(row => ({
+  ...row,
+  total: row.price * row.quantity  // Compute once
+}));
+cf.dimension('total')  // 60x faster!
+```
+
+**Why?** Function dimensions require synchronous processing of every row on the main thread, defeating the purpose of Web Workers. Pre-computing is 60x faster and doesn't block the UI.
+
+See [docs/function-dimensions.md](./docs/function-dimensions.md) for details.
 
 ## Examples
 
