@@ -159,6 +159,7 @@ export class WorkerController {
   private readonly groupState = new Map<number, GroupState>();
   private readonly indexInfo = new Map<number, { ready: boolean; ms?: number; bytes?: number }>();
   private readonly indexResolvers = new Map<number, FrameResolver[]>();
+  private readonly indexTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
   private readonly frameResolvers: FrameResolver[] = [];
   private readonly idleResolvers: FrameResolver[] = [];
   private readonly readyPromise: Promise<void>;
@@ -306,6 +307,11 @@ export class WorkerController {
     this.dimsByName.clear();
     this.indexInfo.clear();
     this.indexResolvers.clear();
+
+    // Clear all pending index build timeouts
+    this.indexTimeouts.forEach((timeout) => clearTimeout(timeout));
+    this.indexTimeouts.clear();
+
     this.filterState.clear();
     this.topKResolvers.clear();
     this.pendingDimensionResolvers.clear();
@@ -376,6 +382,7 @@ export class WorkerController {
             if (arr.length === 0) {
               this.indexResolvers.delete(dimId);
             }
+            this.indexTimeouts.delete(dimId);
             reject(new Error(
               `Index build timeout for dimension ${dimId} after 60 seconds. ` +
               `This may indicate a hung worker or extremely large dataset. ` +
@@ -385,10 +392,17 @@ export class WorkerController {
         }
       }, 60000);
 
+      // Store timeout for cleanup on dispose
+      this.indexTimeouts.set(dimId, timeout);
+
       // Clear timeout when index is built
       const originalResolve = resolve;
       const wrappedResolve = () => {
-        clearTimeout(timeout);
+        const t = this.indexTimeouts.get(dimId);
+        if (t) {
+          clearTimeout(t);
+          this.indexTimeouts.delete(dimId);
+        }
         originalResolve();
       };
 
@@ -404,6 +418,10 @@ export class WorkerController {
 
   async setReduction(dimId: number, reduction: 'sum', valueColumn: string) {
     await this.readyPromise;
+    // Check if disposed after await (async operation could have been interrupted)
+    if (this.disposed) {
+      return Promise.resolve();
+    }
     return this.trackFrame({
       t: 'GROUP_SET_REDUCTION',
       dimId,
@@ -415,10 +433,22 @@ export class WorkerController {
 
   async getTopK(dimId: number, k: number, isBottom: boolean): Promise<Array<{ key: string | number; value: number }>> {
     await this.readyPromise;
+    // Check if disposed after await (async operation could have been interrupted)
+    if (this.disposed) {
+      return Promise.resolve([]);
+    }
+
     const seq = this.nextSeq();
     const promise = new Promise<Array<{ key: string | number; value: number }>>((resolve) => {
       this.topKResolvers.set(seq, resolve);
     });
+
+    // Check again before posting message to avoid race where dispose() happens between set and postMessage
+    if (this.disposed) {
+      this.topKResolvers.delete(seq);
+      return Promise.resolve([]);
+    }
+
     this.worker.postMessage({
       t: 'GROUP_TOP_K',
       dimId,
@@ -485,10 +515,21 @@ export class WorkerController {
         break;
       case 'ERROR':
         console.error('[crossfilterx] worker error:', message.message);
-        // CRITICAL: Flush ALL pending resolvers, not just one
-        // Without this, accumulated promise resolvers leak memory
+        // CRITICAL: Flush ALL pending resolvers and reset state
+        // Without this, accumulated promise resolvers leak memory and pendingFrames desynchronizes
+        this.pendingFrames = 0;
         this.flushFrames();
         this.flushIdle();
+
+        // Reject all pending topK queries
+        this.topKResolvers.forEach((resolve, seq) => {
+          // Can't reject since we only have resolve, so just resolve with empty array
+          resolve([]);
+        });
+        this.topKResolvers.clear();
+
+        // Clear pending dimension resolvers (can't reject, just drop them)
+        this.pendingDimensionResolvers.clear();
         break;
       default: {
         const neverMessage: never = message;
