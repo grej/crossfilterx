@@ -2,6 +2,8 @@
 
 Modern, high-performance multidimensional filtering library with WebWorker and SIMD acceleration.
 
+**[🚀 Try the Live Demo](https://crossfilterx.netlify.app)** | **[📖 Documentation](#documentation)** | **[⭐ GitHub](https://github.com/grej/crossfilterx)**
+
 ## Features
 
 - 🚀 **Near drop-in replacement** for crossfilter2 with improved performance

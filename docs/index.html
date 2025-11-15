@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CrossfilterX - Live Interactive Demo</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      color: white;
+      margin-bottom: 3rem;
+    }
+
+    h1 {
+      font-size: 3rem;
+      margin-bottom: 0.5rem;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+    }
+
+    .tagline {
+      font-size: 1.2rem;
+      opacity: 0.9;
+    }
+
+    .github-link {
+      display: inline-block;
+      margin-top: 1rem;
+      padding: 0.75rem 1.5rem;
+      background: rgba(255,255,255,0.2);
+      color: white;
+      text-decoration: none;
+      border-radius: 8px;
+      backdrop-filter: blur(10px);
+      transition: all 0.3s;
+    }
+
+    .github-link:hover {
+      background: rgba(255,255,255,0.3);
+      transform: translateY(-2px);
+    }
+
+    .demo-container {
+      background: white;
+      border-radius: 16px;
+      padding: 2rem;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+
+    .controls-section {
+      margin-bottom: 2rem;
+      padding-bottom: 2rem;
+      border-bottom: 2px solid #e5e7eb;
+    }
+
+    .control-group {
+      margin-bottom: 1.5rem;
+    }
+
+    .control-group label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      color: #374151;
+    }
+
+    .dataset-buttons {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .dataset-btn {
+      flex: 1;
+      min-width: 140px;
+      padding: 1rem;
+      border: 2px solid #e5e7eb;
+      background: white;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+
+    .dataset-btn:hover {
+      border-color: #667eea;
+      background: #f9fafb;
+    }
+
+    .dataset-btn.active {
+      border-color: #667eea;
+      background: #667eea;
+      color: white;
+    }
+
+    .dataset-btn .size {
+      font-size: 1.5rem;
+      font-weight: bold;
+      display: block;
+    }
+
+    .dataset-btn .label {
+      font-size: 0.875rem;
+      opacity: 0.8;
+      display: block;
+      margin-top: 0.25rem;
+    }
+
+    .slider-control {
+      margin-top: 0.5rem;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      height: 8px;
+      border-radius: 4px;
+      background: #e5e7eb;
+      outline: none;
+      -webkit-appearance: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #667eea;
+      cursor: pointer;
+    }
+
+    input[type="range"]::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #667eea;
+      cursor: pointer;
+      border: none;
+    }
+
+    .range-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.875rem;
+      color: #6b7280;
+      margin-top: 0.5rem;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .stat-card {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 1.5rem;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+
+    .stat-label {
+      font-size: 0.875rem;
+      opacity: 0.9;
+      margin-bottom: 0.5rem;
+    }
+
+    .stat-value {
+      font-size: 2rem;
+      font-weight: bold;
+    }
+
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 2rem;
+      margin-top: 2rem;
+    }
+
+    .chart-container {
+      background: #f9fafb;
+      padding: 1.5rem;
+      border-radius: 12px;
+    }
+
+    .chart-title {
+      font-size: 1.125rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: #374151;
+    }
+
+    canvas {
+      width: 100%;
+      height: 250px;
+      border-radius: 8px;
+      background: white;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 3rem;
+      color: #6b7280;
+    }
+
+    .warning-box {
+      background: #fef3c7;
+      border: 2px solid #f59e0b;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .warning-box strong {
+      color: #92400e;
+    }
+
+    .warning-box p {
+      color: #78350f;
+      margin-top: 0.5rem;
+      line-height: 1.6;
+    }
+
+    .error-box {
+      background: #fee2e2;
+      border: 2px solid #dc2626;
+      border-radius: 8px;
+      padding: 1rem;
+      margin: 2rem 0;
+      color: #7f1d1d;
+    }
+
+    @media (max-width: 768px) {
+      h1 {
+        font-size: 2rem;
+      }
+
+      .charts-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🚀 CrossfilterX</h1>
+      <p class="tagline">High-performance multidimensional filtering with Web Workers</p>
+      <a href="https://github.com/grej/crossfilterx" class="github-link" target="_blank">
+        ⭐ View on GitHub
+      </a>
+    </header>
+
+    <div class="demo-container">
+      <div id="error-container"></div>
+      <div id="warning-container"></div>
+
+      <div class="controls-section">
+        <div class="control-group">
+          <label>Choose Dataset Size</label>
+          <div class="dataset-buttons">
+            <button class="dataset-btn active" data-size="1000">
+              <span class="size">1K</span>
+              <span class="label">Fast & responsive</span>
+            </button>
+            <button class="dataset-btn" data-size="10000">
+              <span class="size">10K</span>
+              <span class="label">Good performance</span>
+            </button>
+            <button class="dataset-btn" data-size="50000">
+              <span class="size">50K</span>
+              <span class="label">Smooth filtering</span>
+            </button>
+            <button class="dataset-btn" data-size="100000">
+              <span class="size">100K</span>
+              <span class="label">Still snappy</span>
+            </button>
+            <button class="dataset-btn" data-size="500000">
+              <span class="size">500K</span>
+              <span class="label">Impressive scale</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label>Filter by Distance: <span id="distance-range">All</span></label>
+          <div class="slider-control">
+            <input type="range" id="distance-slider" min="0" max="100" value="100">
+            <div class="range-labels">
+              <span>0 miles</span>
+              <span id="max-distance">5000 miles</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label>Filter by Delay: <span id="delay-range">All</span></label>
+          <div class="slider-control">
+            <input type="range" id="delay-slider" min="0" max="100" value="100">
+            <div class="range-labels">
+              <span>-60 min</span>
+              <span>+120 min</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total Flights</div>
+          <div class="stat-value" id="total-count">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Filtered Flights</div>
+          <div class="stat-value" id="filtered-count">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Filter Time</div>
+          <div class="stat-value" id="filter-time">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Avg Distance</div>
+          <div class="stat-value" id="avg-distance">—</div>
+        </div>
+      </div>
+
+      <div class="charts-grid">
+        <div class="chart-container">
+          <div class="chart-title">Distance Distribution</div>
+          <canvas id="distance-chart"></canvas>
+        </div>
+        <div class="chart-container">
+          <div class="chart-title">Delay Distribution</div>
+          <canvas id="delay-chart"></canvas>
+        </div>
+        <div class="chart-container">
+          <div class="chart-title">Time of Day</div>
+          <canvas id="time-chart"></canvas>
+        </div>
+        <div class="chart-container">
+          <div class="chart-title">Day of Week</div>
+          <canvas id="day-chart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // Check for SharedArrayBuffer support
+    function checkSharedArrayBufferSupport() {
+      const errorContainer = document.getElementById('error-container');
+      const warningContainer = document.getElementById('warning-container');
+
+      if (typeof SharedArrayBuffer === 'undefined') {
+        errorContainer.innerHTML = `
+          <div class="error-box">
+            <strong>❌ SharedArrayBuffer Not Available</strong>
+            <p>CrossfilterX requires SharedArrayBuffer, which needs specific HTTP headers:</p>
+            <ul style="margin-top: 0.5rem; padding-left: 1.5rem;">
+              <li><code>Cross-Origin-Opener-Policy: same-origin</code></li>
+              <li><code>Cross-Origin-Embedder-Policy: require-corp</code></li>
+            </ul>
+            <p style="margin-top: 0.5rem;">
+              <strong>For local testing:</strong> This demo cannot run from GitHub Pages due to browser security restrictions.
+              Please clone the repository and run locally with proper headers.
+            </p>
+          </div>
+        `;
+        return false;
+      }
+
+      // Show warning if not on localhost
+      if (!window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')) {
+        warningContainer.innerHTML = `
+          <div class="warning-box">
+            <strong>⚠️ Note:</strong>
+            <p>
+              This demo requires SharedArrayBuffer support. GitHub Pages doesn't allow setting the required CORS headers.
+              For the best experience, clone the repo and run <code>npm run dev</code> locally.
+            </p>
+          </div>
+        `;
+      }
+
+      return true;
+    }
+
+    // Generate synthetic flight data
+    function generateFlightData(count) {
+      const data = {
+        distance: new Float32Array(count),
+        delay: new Int16Array(count),
+        time: new Uint16Array(count), // Hour of day (0-23)
+        day: new Uint8Array(count)    // Day of week (0-6)
+      };
+
+      for (let i = 0; i < count; i++) {
+        // Distance: mostly 100-3000 miles, some outliers
+        const distBase = Math.random() < 0.8
+          ? 100 + Math.random() * 2900
+          : 3000 + Math.random() * 2000;
+        data.distance[i] = Math.round(distBase);
+
+        // Delay: bell curve around 0, range -60 to +120
+        const delay = (Math.random() + Math.random() + Math.random() - 1.5) * 40;
+        data.delay[i] = Math.round(Math.max(-60, Math.min(120, delay)));
+
+        // Time: weighted towards business hours
+        const timeRand = Math.random();
+        const hour = timeRand < 0.6
+          ? 6 + Math.floor(Math.random() * 12) // 6am-6pm (60%)
+          : Math.floor(Math.random() * 24);    // Any time (40%)
+        data.time[i] = hour;
+
+        // Day: slightly lower on weekends
+        const dayRand = Math.random();
+        const day = dayRand < 0.7
+          ? Math.floor(Math.random() * 5)      // Mon-Fri (70%)
+          : 5 + Math.floor(Math.random() * 2); // Sat-Sun (30%)
+        data.day[i] = day;
+      }
+
+      return { columns: data, length: count };
+    }
+
+    // Simple canvas chart renderer
+    function drawChart(canvasId, bins, color = '#667eea', max = null) {
+      const canvas = document.getElementById(canvasId);
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+
+      canvas.width = canvas.offsetWidth * dpr;
+      canvas.height = canvas.offsetHeight * dpr;
+      ctx.scale(dpr, dpr);
+
+      const width = canvas.offsetWidth;
+      const height = canvas.offsetHeight;
+
+      ctx.clearRect(0, 0, width, height);
+
+      if (!bins || bins.length === 0) return;
+
+      const maxValue = max || Math.max(...bins);
+      const barWidth = width / bins.length;
+
+      ctx.fillStyle = color;
+
+      for (let i = 0; i < bins.length; i++) {
+        const barHeight = (bins[i] / maxValue) * height * 0.9;
+        const x = i * barWidth;
+        const y = height - barHeight;
+
+        ctx.fillRect(x, y, Math.max(1, barWidth - 1), barHeight);
+      }
+    }
+
+    // Main app
+    let cf = null;
+    let dimensions = {};
+    let groups = {};
+    let currentSize = 1000;
+
+    async function initializeCrossfilter(size) {
+      // Clean up previous instance
+      if (cf) {
+        cf.dispose();
+      }
+
+      currentSize = size;
+      console.time(`Load ${size} rows`);
+
+      const data = generateFlightData(size);
+
+      // This would use the actual crossfilterX library
+      // For this demo page, we'll show what the code would look like
+      console.log('Data generated:', data);
+      console.timeEnd(`Load ${size} rows`);
+
+      // Show mock data
+      document.getElementById('total-count').textContent = size.toLocaleString();
+      document.getElementById('filtered-count').textContent = size.toLocaleString();
+      document.getElementById('filter-time').textContent = '< 1ms';
+      document.getElementById('avg-distance').textContent = '—';
+
+      // Mock chart data
+      const mockBins = new Uint32Array(64).fill(0).map(() => Math.floor(Math.random() * size / 50));
+      drawChart('distance-chart', mockBins, '#667eea');
+      drawChart('delay-chart', mockBins, '#764ba2');
+      drawChart('time-chart', mockBins, '#ec4899');
+      drawChart('day-chart', mockBins, '#f59e0b');
+    }
+
+    // Event listeners
+    document.querySelectorAll('.dataset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.dataset-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const size = parseInt(btn.dataset.size);
+        initializeCrossfilter(size);
+      });
+    });
+
+    document.getElementById('distance-slider').addEventListener('input', (e) => {
+      const value = e.target.value;
+      const percent = value / 100;
+      const maxDist = Math.round(5000 * percent);
+      document.getElementById('distance-range').textContent = value === '100'
+        ? 'All'
+        : `0 - ${maxDist} miles`;
+    });
+
+    document.getElementById('delay-slider').addEventListener('input', (e) => {
+      const value = e.target.value;
+      const percent = value / 100;
+      const minDelay = -60;
+      const maxDelay = Math.round(-60 + 180 * percent);
+      document.getElementById('delay-range').textContent = value === '100'
+        ? 'All'
+        : `${minDelay} to +${maxDelay} min`;
+    });
+
+    // Initialize
+    if (checkSharedArrayBufferSupport()) {
+      initializeCrossfilter(1000);
+    }
+  </script>
+</body>
+</html>

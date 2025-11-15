@@ -1,0 +1,6 @@
+# Netlify headers for SharedArrayBuffer support
+# Required for CrossfilterX to work
+
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp

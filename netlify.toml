@@ -1,0 +1,27 @@
+# Netlify configuration for CrossfilterX
+
+[build]
+  # Publish the docs directory for the demo site
+  publish = "docs"
+  # No build command needed for static site
+  command = "echo 'No build needed'"
+
+# Required headers for SharedArrayBuffer support
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Embedder-Policy = "require-corp"
+
+# Redirect root to GitHub
+[[redirects]]
+  from = "https://crossfilterx.netlify.app/"
+  to = "https://github.com/grej/crossfilterx"
+  status = 302
+  force = false
+
+# SPA fallback (if needed)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
