@@ -706,7 +706,14 @@ function snapshotToGroupState(snapshot: GroupSnapshot): GroupState {
   }
 
   if (snapshot.sum) {
-    state.sum = new Float64Array(snapshot.sum);
+    // CRITICAL: Create view into SharedArrayBuffer instead of copying
+    // This prevents massive memory allocation on every instance creation
+    // Copying would allocate bins.length * 8 bytes per instance (e.g., 32KB for 4096 bins)
+    state.sum = new Float64Array(
+      snapshot.sum,
+      0,
+      snapshot.binCount
+    );
   }
 
   return state;
