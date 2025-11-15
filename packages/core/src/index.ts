@@ -64,6 +64,9 @@ class DimensionHandleImpl implements DimensionHandle {
       this.resolvedId = null;
       this.idPromise = id.then((resolved) => {
         this.resolvedId = resolved;
+        // Reset pending chain once resolved to prevent unbounded growth
+        // Any subsequent operations will use the synchronous path
+        this.pending = Promise.resolve();
         return resolved;
       });
       this.pending = this.pending.then(() => this.idPromise).then(() => {});

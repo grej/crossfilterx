@@ -359,10 +359,45 @@ export class WorkerController {
   async buildIndex(dimId: number) {
     await this.readyPromise;
     if (this.indexInfo.get(dimId)?.ready) return Promise.resolve();
-    return new Promise<void>((resolve) => {
+
+    return new Promise<void>((resolve, reject) => {
       const resolvers = this.indexResolvers.get(dimId) ?? [];
       resolvers.push(resolve);
       this.indexResolvers.set(dimId, resolvers);
+
+      // Safety timeout: index building can be slow for large datasets
+      // 60 seconds should be sufficient even for 1M+ rows
+      const timeout = setTimeout(() => {
+        const arr = this.indexResolvers.get(dimId);
+        if (arr) {
+          const idx = arr.indexOf(resolve);
+          if (idx !== -1) {
+            arr.splice(idx, 1);
+            if (arr.length === 0) {
+              this.indexResolvers.delete(dimId);
+            }
+            reject(new Error(
+              `Index build timeout for dimension ${dimId} after 60 seconds. ` +
+              `This may indicate a hung worker or extremely large dataset. ` +
+              `Consider pre-building indices or using smaller datasets.`
+            ));
+          }
+        }
+      }, 60000);
+
+      // Clear timeout when index is built
+      const originalResolve = resolve;
+      const wrappedResolve = () => {
+        clearTimeout(timeout);
+        originalResolve();
+      };
+
+      // Replace the resolver in the array with the wrapped version
+      const idx = resolvers.indexOf(resolve);
+      if (idx !== -1) {
+        resolvers[idx] = wrappedResolve;
+      }
+
       this.worker.postMessage({ t: 'BUILD_INDEX', dimId });
     });
   }
